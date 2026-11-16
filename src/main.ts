@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
-import { World } from './world'
+import { World, dist } from './world'
 import { Agent } from './agent'
 import { MockBrain, LLMBrain } from './brain'
 import { Avatar } from './avatar'
@@ -99,6 +99,9 @@ scene.add(hemi, sun)
 // Walls between the camera and the room are hidden every frame, so the camera can orbit freely.
 const walls: { mesh: THREE.Object3D; hide: () => boolean }[] = []
 const lampLights: THREE.PointLight[] = []
+let doorLeaf: THREE.Object3D | undefined
+let doorAngle = 0
+let doorOpen = 0 // 0 closed .. 1 open
 new GLTFLoader().load(`${import.meta.env.BASE_URL}models/room.glb`, gltf => {
   gltf.scene.traverse(o => {
     if (o instanceof THREE.Mesh) o.castShadow = o.receiveShadow = true
@@ -116,6 +119,14 @@ new GLTFLoader().load(`${import.meta.env.BASE_URL}models/room.glb`, gltf => {
     const mesh = gltf.scene.getObjectByName(name)
     if (mesh) walls.push({ mesh, hide })
   }
+  // the door frame and leaf are cut away together with the wall they are in, instead of floating in the gap
+  for (const name of ['FURN_door', 'DOOR_leaf']) {
+    const mesh = gltf.scene.getObjectByName(name)
+    if (mesh) walls.push({ mesh, hide: side.Walls_Right })
+  }
+  // the leaf swings open (about its hinge) when someone is at the door
+  doorLeaf = gltf.scene.getObjectByName('DOOR_leaf')
+  doorAngle = THREE.MathUtils.degToRad(Number(doorLeaf?.userData.open_angle ?? 0))
   scene.add(gltf.scene)
   // the lamps glow warm at night, the glow fades out with the daylight (see frame())
   gltf.scene.updateMatrixWorld(true)
@@ -234,6 +245,11 @@ function frame(now: number) {
   sun.intensity = 0.2 + daylight * 1.1
   hemi.intensity = 0.25 + daylight * 0.4
   for (const l of lampLights) l.intensity = (1 - daylight) * 4
+  if (doorLeaf) {
+    const near = agents.some(a => dist(a.pos, world.door) < 1.3)
+    doorOpen += ((near ? 1 : 0) - doorOpen) * (1 - Math.exp(-dt * 7))
+    doorLeaf.rotation.y = doorAngle * doorOpen
+  }
 
   agents.forEach((a, i) => avatars[i].update(dt, a))
   if (debug.visible) {

@@ -208,7 +208,8 @@ for i in range(40):
 B['grass_yard'].poly(list(reversed(yard_pts)))
 
 # ---- patio and stepping stones from the door ----
-B['path'].box(P(6.0, DOOR_Z, -0.10), (1.8, 2.0, 0.16))
+# starts at the edge of the foundation (x = 5.25) so the two tops, both at -0.02, do not overlap and flicker
+B['path'].box(P(6.075, DOOR_Z, -0.10), (1.65, 2.0, 0.16))
 x = 7.4
 n = 0
 while x < 30:

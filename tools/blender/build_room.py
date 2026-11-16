@@ -141,6 +141,7 @@ class Item:
         self.id, self.kind, self.obj, self.facing = id, kind, obj, facing
         self.blocks, self.collide, self.group = blocks, collide, group
         self.bvh = None
+        self.leaf = None  # a separate moving part, for the door
 
     def world_verts(self):
         # Objects only carry a location (scale and turn live in the mesh), and matrix_world is
@@ -167,7 +168,7 @@ class Item:
 
 
 def place(id, model, kind=None, facing='+z', scale=(K, K, K), h=0.0, blocks=True, collide=True,
-          group='furniture', recolor=None, x0=None, x1=None, cx=None, z0=None, z1=None, cz=None):
+          group='furniture', recolor=None, x0=None, x1=None, cx=None, z0=None, z1=None, cz=None, split=None):
     """Import a Kenney model, scale and turn it so its front faces `facing` (game direction),
     then move it so its bounding box meets the given edges (x0/x1/cx and z0/z1/cz, game coordinates)
     and its bottom sits at height h."""
@@ -175,11 +176,18 @@ def place(id, model, kind=None, facing='+z', scale=(K, K, K), h=0.0, blocks=True
     bpy.ops.import_scene.gltf(filepath=os.path.join(KIT, model + '.glb'))
     new = [o for o in bpy.data.objects if o not in before]
     meshes = [o for o in new if o.type == 'MESH']
+    hinge = None
+    if split:  # a moving part (the door leaf): kept as its own object, its origin is the hinge
+        hinge = next(o for o in meshes if o.name == split).matrix_world.translation.copy()
     for o in meshes:
         o.data = o.data.copy()
         o.data.transform(o.matrix_world)
         o.parent = None
         o.matrix_world = Matrix.Identity(4)
+    leaf = None
+    if split:
+        leaf = next(o for o in meshes if o.name == split)
+        meshes = [o for o in meshes if o is not leaf]
     target = meshes[0]
     for o in new:  # glTF import adds empties for the node tree; only the meshes are kept
         if o.type != 'MESH':
@@ -190,8 +198,10 @@ def place(id, model, kind=None, facing='+z', scale=(K, K, K), h=0.0, blocks=True
             bpy.ops.object.join()
     ob = target
     me = ob.data
-    me.transform(Matrix.Diagonal((scale[0], scale[1], scale[2], 1.0)))
-    me.transform(Matrix.Rotation(FACING_YAW[facing], 4, 'Z'))
+    S4 = Matrix.Diagonal((scale[0], scale[1], scale[2], 1.0))
+    R4 = Matrix.Rotation(FACING_YAW[facing], 4, 'Z')
+    me.transform(S4)
+    me.transform(R4)
     vs = [v.co for v in me.vertices]
     gx_min, gx_max = min(v.x for v in vs), max(v.x for v in vs)
     gz_min, gz_max = min(-v.y for v in vs), max(-v.y for v in vs)
@@ -200,8 +210,25 @@ def place(id, model, kind=None, facing='+z', scale=(K, K, K), h=0.0, blocks=True
     tx = x0 if x0 is not None else (x1 - w if x1 is not None else cx - w / 2)
     tz = z0 if z0 is not None else (z1 - d if z1 is not None else cz - d / 2)
     # origin at the footprint centre, on the floor of the model
-    me.transform(Matrix.Translation(Vector((-(gx_min + w / 2), (gz_min + d / 2), -h_min))))
+    T4 = Matrix.Translation(Vector((-(gx_min + w / 2), (gz_min + d / 2), -h_min)))
+    me.transform(T4)
     ob.location = g2b(tx + w / 2, tz + d / 2, h)
+    if leaf is not None:
+        # same placement as the rest of the model, then move the mesh so that the hinge is the origin
+        hv = T4 @ R4 @ S4 @ hinge
+        lm = leaf.data
+        for m4 in (S4, R4, T4, Matrix.Translation(-hv)):
+            lm.transform(m4)
+        leaf.location = ob.location + hv
+        for slot in leaf.material_slots:
+            slot.material = shared_material(slot.material)
+        for p_ in lm.polygons:
+            p_.use_smooth = False
+        for c in list(leaf.users_collection):
+            c.objects.unlink(leaf)
+        ROOM_COLL.objects.link(leaf)
+        leaf.name = lm.name = f'{id.upper()}_leaf'
+        leaf.parent = ROOT
     for slot in ob.material_slots:
         base = slot.material.name.split('.')[0]
         rename = recolor.get(base) if recolor else None
@@ -218,6 +245,7 @@ def place(id, model, kind=None, facing='+z', scale=(K, K, K), h=0.0, blocks=True
     ob['model'] = model
     ob['blocks_walk'] = 1 if blocks else 0
     it = Item(id, kind or model, ob, facing, blocks, collide, group)
+    it.leaf = leaf
     ITEMS[id] = it
     return it
 
@@ -251,7 +279,13 @@ for j in range(4):
 right = ['wall', 'wall', 'wall', 'wallDoorway']  # z -4..4
 for j, m in enumerate(right):
     place(f'wall_right_{j}', m, 'wall', facing='-x', cx=HW + WALL_T / 2, z0=-HD + 2 * j, recolor={'_defaultMat': 'wall_right'}, **SHELL)
-door = place('door', 'doorwayFront', 'door', facing='-x', cx=HW + WALL_T / 2, cz=-HD + 7.0, **SHELL)
+door = place('door', 'doorwayFront', 'door', facing='-x', cx=HW + WALL_T / 2, cz=-HD + 7.0, split='door', **SHELL)
+# The leaf is a separate node, DOOR_leaf, with its origin on the hinge, so the game can swing it open when
+# someone walks through. It swings outwards (onto the patio), clear of the coat rack and the kitchen.
+# `open_angle` is the rotation about the vertical (three.js +y) in degrees that opens it.
+lv = [v.co for v in door.leaf.data.vertices]
+away_z = -sum(v.y for v in lv) / len(lv)  # game z of the leaf's middle, relative to the hinge
+door.leaf['open_angle'] = (100.0 if away_z > 0 else -100.0)
 
 # ============================================================================================
 # sleeping area: two single beds, nightstand, wardrobe
