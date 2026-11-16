@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js'
 import { World } from './world'
 import { Agent } from './agent'
@@ -56,8 +57,19 @@ document.body.appendChild(labelRenderer.domElement)
 
 const scene = new THREE.Scene()
 const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 100)
-camera.position.set(0, 9, 11)
-camera.lookAt(0, 0.5, 0)
+const HOME = { pos: new THREE.Vector3(0, 9, 11), target: new THREE.Vector3(0, 0.5, 0) }
+camera.position.copy(HOME.pos)
+
+// orbit: drag = rotate, right-drag = pan, wheel = zoom. F cycles follow-cam, R resets the view.
+const controls = new OrbitControls(camera, renderer.domElement)
+controls.target.copy(HOME.target)
+controls.enableDamping = true
+controls.dampingFactor = 0.08
+controls.minDistance = 1.5
+controls.maxDistance = 24
+controls.maxPolarAngle = Math.PI / 2 - 0.05 // stay above the floor
+controls.update()
+let follow = -1 // -1 = free camera, otherwise agent index
 
 const hemi = new THREE.HemisphereLight(0xffffff, 0x445566, 0.6)
 const sun = new THREE.DirectionalLight(0xffffff, 1.2)
@@ -120,7 +132,7 @@ addEventListener('drop', e => {
   if (f && f.name.toLowerCase().endsWith('.vrm')) avatars[i].loadFile(f).catch(err => console.warn(err))
 })
 
-;(window as any).dbg = { world, agents, avatars, camera } // handy for console poking
+;(window as any).dbg = { world, agents, avatars, camera, controls } // handy for console poking
 
 // ---- navigation debug overlay (press G) ----
 const debug = new THREE.Group()
@@ -152,6 +164,12 @@ const pathLines = agents.map(a => {
 const hud = document.getElementById('hud')!
 addEventListener('keydown', e => {
   if (e.key === 'g' || e.key === 'G') debug.visible = !debug.visible
+  if (e.key === 'f' || e.key === 'F') follow = follow + 1 >= agents.length ? -1 : follow + 1
+  if (e.key === 'r' || e.key === 'R') {
+    follow = -1
+    camera.position.copy(HOME.pos)
+    controls.target.copy(HOME.target)
+  }
   if (e.key === '1') world.speed = 10
   if (e.key === '2') world.speed = 60
   if (e.key === '3') world.speed = 240
@@ -193,10 +211,19 @@ function frame(now: number) {
   }
 
   hud.textContent =
-    `${world.clock}   speed x${world.speed} (1/2/3 speed, G nav debug)   brain: ${brain instanceof LLMBrain ? 'LLM' : 'mock'}\n` +
+    `${world.clock}   speed x${world.speed} (1/2/3 speed, G nav, F follow, R reset)   brain: ${brain instanceof LLMBrain ? 'LLM' : 'mock'}${follow >= 0 ? `   following ${agents[follow].name}` : ''}\n` +
     (brain instanceof LLMBrain && brain.status ? `⚠ ${brain.status}\n` : '') + '\n' +
     agents.map(a => a.statusText + (a.memory.length ? '\n  ' + a.memory.slice(-3).join('\n  ') : '')).join('\n\n')
 
+  if (follow >= 0) {
+    // glide the orbit target onto the agent, moving the camera by the same amount to keep the framing
+    const a = agents[follow]
+    const want = new THREE.Vector3(a.pos.x, a.pose === 'lie' ? 0.6 : 1.0, a.pos.z)
+    const delta = want.sub(controls.target).multiplyScalar(1 - Math.exp(-dt * 6))
+    controls.target.add(delta)
+    camera.position.add(delta)
+  }
+  controls.update()
   renderer.render(scene, camera)
   labelRenderer.render(scene, camera)
 }
