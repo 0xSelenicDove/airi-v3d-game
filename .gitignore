@@ -1,0 +1,7 @@
+node_modules
+dist
+.env.local
+.env.*.local
+.DS_Store
+# user-supplied avatar models (large, personal); drop your own .vrm files here
+public/*.vrm

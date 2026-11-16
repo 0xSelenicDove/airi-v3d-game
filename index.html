@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>AI World</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #111; font-family: ui-monospace, monospace; }
+      #hud { position: fixed; top: 8px; left: 8px; color: #eee; background: #0008; padding: 8px 10px; border-radius: 6px; font-size: 12px; white-space: pre; pointer-events: none; }
+      .label { width: max-content; display: flex; flex-direction: column; align-items: center; gap: 4px; transform: translateY(-100%); pointer-events: none; font-family: system-ui, sans-serif; }
+      .nametag { font-size: 11px; color: #fff; background: #000a; padding: 1px 8px; border-radius: 10px; border: 1.5px solid #fff; }
+      .bubble { display: none; position: relative; width: max-content; max-width: 200px; padding: 7px 11px; border-radius: 14px; font-size: 13px; line-height: 1.35; text-align: center; word-break: break-word; box-shadow: 0 2px 8px #0005; }
+      .bubble.on { display: block; animation: pop .18s ease-out; }
+      .bubble::after { content: ''; position: absolute; left: 50%; bottom: -6px; margin-left: -6px; border: 6px solid transparent; border-bottom: 0; }
+      .say { background: #fff; color: #222; }
+      .say::after { border-top-color: #fff; }
+      .think { background: #e6e9f2cc; color: #556; font-style: italic; font-size: 12px; }
+      .think::after { border-top-color: #e6e9f2cc; }
+      @keyframes pop { from { transform: scale(.6); opacity: 0 } to { transform: scale(1); opacity: 1 } }
+    </style>
+  </head>
+  <body>
+    <div id="hud"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

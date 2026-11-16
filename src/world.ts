@@ -1,0 +1,190 @@
+import type { Needs, WorldObject, Vec2, Inhabitant } from './types'
+
+export class World {
+  /** game minutes since start */
+  minutes = 8 * 60
+  /** game minutes per real second */
+  speed = 10
+  readonly objects: WorldObject[] = []
+  readonly inhabitants: Inhabitant[] = []
+  /** objectId -> agent name; sitting/lying objects fit one agent at a time */
+  private occupancy = new Map<string, string>()
+  readonly bounds = { w: 10, d: 8 }
+
+  // ---- navigation grid ----
+  readonly cell = 0.2
+  readonly agentRadius = 0.35
+  private nx = Math.round(this.bounds.w / this.cell)
+  private nz = Math.round(this.bounds.d / this.cell)
+  private blocked = new Uint8Array(this.nx * this.nz)
+
+  private cx(i: number) { return -this.bounds.w / 2 + (i + 0.5) * this.cell }
+  private cz(j: number) { return -this.bounds.d / 2 + (j + 0.5) * this.cell }
+  private ci(x: number) { return Math.floor((x + this.bounds.w / 2) / this.cell) }
+  private cj(z: number) { return Math.floor((z + this.bounds.d / 2) / this.cell) }
+
+  private buildGrid() {
+    const r = this.agentRadius, hw = this.bounds.w / 2, hd = this.bounds.d / 2
+    for (let j = 0; j < this.nz; j++) for (let i = 0; i < this.nx; i++) {
+      const x = this.cx(i), z = this.cz(j)
+      let b = Math.abs(x) > hw - r || Math.abs(z) > hd - r // keep clear of the walls
+      for (const o of this.objects) {
+        const f = o.footprint
+        if (f && Math.abs(x - f.cx) < f.w / 2 + r && Math.abs(z - f.cz) < f.d / 2 + r) b = true
+      }
+      this.blocked[j * this.nx + i] = b ? 1 : 0
+    }
+  }
+
+  /** centres of blocked cells, for the debug overlay */
+  blockedCells(): Vec2[] {
+    const out: Vec2[] = []
+    for (let j = 0; j < this.nz; j++) for (let i = 0; i < this.nx; i++) if (this.blocked[j * this.nx + i]) out.push({ x: this.cx(i), z: this.cz(j) })
+    return out
+  }
+
+  isFree(p: Vec2) {
+    const i = this.ci(p.x), j = this.cj(p.z)
+    return i >= 0 && j >= 0 && i < this.nx && j < this.nz && !this.blocked[j * this.nx + i]
+  }
+
+  private clearLine(a: Vec2, b: Vec2) {
+    const n = Math.ceil(dist(a, b) / (this.cell / 5))
+    for (let k = 0; k <= n; k++) {
+      const t = n ? k / n : 0
+      if (!this.isFree({ x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t })) return false
+    }
+    return true
+  }
+
+  /** nearest free cell to p (BFS outward), for starts/goals that sit inside an obstacle */
+  private nearestFree(p: Vec2): [number, number] | null {
+    const si = Math.min(this.nx - 1, Math.max(0, this.ci(p.x))), sj = Math.min(this.nz - 1, Math.max(0, this.cj(p.z)))
+    const seen = new Set<number>([sj * this.nx + si])
+    const q: [number, number][] = [[si, sj]]
+    for (let h = 0; h < q.length; h++) {
+      const [i, j] = q[h]
+      if (!this.blocked[j * this.nx + i]) return [i, j]
+      for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const ni = i + di, nj = j + dj, key = nj * this.nx + ni
+        if (ni >= 0 && nj >= 0 && ni < this.nx && nj < this.nz && !seen.has(key)) { seen.add(key); q.push([ni, nj]) }
+      }
+    }
+    return null
+  }
+
+  /**
+   * Waypoints from `from` to `to` that avoid furniture and walls (A* on the grid, then line-of-sight
+   * simplification). The final point is exactly `to`; `from` is not included.
+   */
+  findPath(from: Vec2, to: Vec2): Vec2[] {
+    const s = this.nearestFree(from), g = this.nearestFree(to)
+    if (!s || !g) return [to]
+    const N = this.nx * this.nz, key = (i: number, j: number) => j * this.nx + i
+    const gScore = new Float32Array(N).fill(Infinity), came = new Int32Array(N).fill(-1), closed = new Uint8Array(N)
+    const open: [number, number][] = [] // [f, key]
+    const h = (i: number, j: number) => Math.hypot(i - g[0], j - g[1])
+    gScore[key(s[0], s[1])] = 0
+    open.push([h(s[0], s[1]), key(s[0], s[1])])
+    let found = false
+    while (open.length) {
+      let bi = 0
+      for (let k = 1; k < open.length; k++) if (open[k][0] < open[bi][0]) bi = k
+      const [, cur] = open.splice(bi, 1)[0]
+      if (closed[cur]) continue
+      closed[cur] = 1
+      const ci = cur % this.nx, cj = Math.floor(cur / this.nx)
+      if (ci === g[0] && cj === g[1]) { found = true; break }
+      for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) {
+        if (!di && !dj) continue
+        const ni = ci + di, nj = cj + dj
+        if (ni < 0 || nj < 0 || ni >= this.nx || nj >= this.nz || this.blocked[key(ni, nj)]) continue
+        // no cutting corners between two blocked neighbours
+        if (di && dj && (this.blocked[key(ci + di, cj)] || this.blocked[key(ci, cj + dj)])) continue
+        const nk = key(ni, nj), ng = gScore[cur] + Math.hypot(di, dj)
+        if (ng < gScore[nk]) { gScore[nk] = ng; came[nk] = cur; open.push([ng + h(ni, nj), nk]) }
+      }
+    }
+    if (!found) return [to]
+    const cells: Vec2[] = []
+    for (let k = key(g[0], g[1]); k !== -1; k = came[k]) cells.push({ x: this.cx(k % this.nx), z: this.cz(Math.floor(k / this.nx)) })
+    cells.reverse()
+    // string-pull: keep only the corners we actually need
+    const pts: Vec2[] = [from, ...cells, to]
+    const out: Vec2[] = []
+    let anchor = 0
+    while (anchor < pts.length - 1) {
+      let far = pts.length - 1
+      while (far > anchor + 1 && !this.clearLine(pts[anchor], pts[far])) far--
+      out.push(pts[far])
+      anchor = far
+    }
+    return out
+  }
+
+  constructor() {
+    this.objects.push(
+      {
+        id: 'bed', kind: 'bed', pos: { x: -3.5, z: -2.5 }, usePos: { x: -3.5, z: -2.5 },
+        footprint: { cx: -3.5, cz: -2.5, w: 2.2, d: 1.4 }, approach: { x: -1.8, z: -2.5 },
+        affordances: [{ verb: 'sleep', duration: 360, effects: { energy: 90 }, pose: 'lie' }],
+      },
+      {
+        id: 'bed2', kind: 'bed', pos: { x: -3.5, z: 0.4 }, usePos: { x: -3.5, z: 0.4 },
+        footprint: { cx: -3.5, cz: 0.4, w: 2.2, d: 1.4 }, approach: { x: -1.8, z: 0.4 },
+        affordances: [{ verb: 'sleep', duration: 360, effects: { energy: 90 }, pose: 'lie' }],
+      },
+      {
+        id: 'desk', kind: 'computer desk', pos: { x: 3.5, z: -3 }, usePos: { x: 3.5, z: -2.2 },
+        footprint: { cx: 3.5, cz: -3.4, w: 2.4, d: 1.2 },
+        affordances: [
+          { verb: 'use_computer', duration: 90, effects: { fun: 35, energy: -12 }, pose: 'sit' },
+        ],
+      },
+      {
+        id: 'bookshelf', kind: 'bookshelf', pos: { x: 4.7, z: 0.5 }, usePos: { x: 3.9, z: 0.5 },
+        footprint: { cx: 4.7, cz: 0.5, w: 0.6, d: 2.6 },
+        affordances: [
+          { verb: 'read', duration: 60, effects: { knowledge: 30, fun: 8, energy: -5 }, pose: 'stand' },
+        ],
+      },
+    )
+    this.buildGrid()
+  }
+
+  get hour() { return Math.floor(this.minutes / 60) % 24 }
+  get day() { return Math.floor(this.minutes / 1440) + 1 }
+  get clock() { return this.format(this.minutes) }
+  format(t: number) {
+    const day = Math.floor(t / 1440) + 1, h = Math.floor(t / 60) % 24, m = Math.floor(t % 60)
+    return `Day ${day} ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+  }
+
+  occupant(id: string) { return this.occupancy.get(id) }
+  claim(id: string, who: string) { this.occupancy.set(id, who) }
+  release(id: string, who: string) { if (this.occupancy.get(id) === who) this.occupancy.delete(id) }
+
+  /** Everyone within earshot (the room is small, so: everyone nearby) hears it. */
+  broadcast(from: Inhabitant, text: string, range = 8) {
+    for (const i of this.inhabitants) {
+      if (i !== from && dist(i.pos, from.pos) <= range) i.hear(from.name, text)
+    }
+  }
+
+  find(id: string) { return this.objects.find(o => o.id === id) }
+
+  advance(realDt: number) {
+    const gameDt = realDt * this.speed
+    this.minutes += gameDt
+    return gameDt
+  }
+
+  decayNeeds(needs: Needs, gameMinutes: number) {
+    needs.energy = clamp(needs.energy - 0.06 * gameMinutes)
+    needs.fun = clamp(needs.fun - 0.08 * gameMinutes)
+    needs.knowledge = clamp(needs.knowledge - 0.03 * gameMinutes)
+  }
+}
+
+export const clamp = (v: number, lo = 0, hi = 100) => Math.min(hi, Math.max(lo, v))
+export const dist = (a: Vec2, b: Vec2) => Math.hypot(a.x - b.x, a.z - b.z)
