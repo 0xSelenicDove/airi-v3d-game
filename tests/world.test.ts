@@ -48,10 +48,29 @@ describe('World navigation', () => {
 
   it('the house walls and the fence stay blocked, the doorway and the yard are open', () => {
     expect(w.isFree({ x: w.bounds.w / 2, z: 0 })).toBe(false) // wall
-    expect(w.isFree({ x: w.bounds.w / 2, z: w.door.z + 0.1 })).toBe(true) // doorway
+    expect(w.isFree({ x: w.bounds.w / 2, z: w.door.z })).toBe(true) // doorway
     expect(w.isFree({ x: -w.bounds.w / 2, z: w.door.z })).toBe(false) // no door on the left wall
     expect(w.isFree({ x: 8, z: 6 })).toBe(true) // lawn
     expect(w.isFree({ x: w.yard.x1 - 0.1, z: 0 })).toBe(false) // fence
+    expect(w.isFree({ x: w.gate.x, z: w.gate.z })).toBe(true) // gate
+    expect(w.isFree({ x: w.yard.x1 + 3, z: 0 })).toBe(true) // meadow side
+  })
+
+  it('the meadow beyond the gate is reached through the gate, not through the fence', () => {
+    const goal = w.find('campfire')!.usePos
+    const path = w.findPath({ x: 0, z: 0 }, goal)
+    let through = false, prev = { x: 0, z: 0 }
+    for (const p of path) {
+      for (let t = 0; t <= 1; t += 0.01) {
+        const q = { x: prev.x + (p.x - prev.x) * t, z: prev.z + (p.z - prev.z) * t }
+        if (Math.abs(q.x - w.gate.x) < 0.1) {
+          expect(Math.abs(q.z - w.gate.z), 'crossed the fence line away from the gate').toBeLessThanOrEqual(w.gate.halfWidth + 1e-6)
+          through = true
+        }
+      }
+      prev = p
+    }
+    expect(through).toBe(true)
   })
 
   it('night-only and day-only activities follow the clock', () => {

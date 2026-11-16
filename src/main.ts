@@ -102,6 +102,10 @@ const GHOST = 0.08 // opacity of a wall that is in the way
 const walls: { meshes: THREE.Mesh[]; hide: () => boolean; fade: number }[] = []
 const lampLights: THREE.PointLight[] = []
 let doorLeaf: THREE.Object3D | undefined
+// the campfire in the meadow: a warm flickering light after dark
+const fireObj = world.find('campfire')
+const fireLight = new THREE.PointLight(0xff8a3c, 0, 9, 2)
+if (fireObj) { fireLight.position.set(fireObj.pos.x, 0.7, fireObj.pos.z); scene.add(fireLight) }
 let doorAngle = 0
 let doorOpen = 0 // 0 closed .. 1 open
 new GLTFLoader().load(`${import.meta.env.BASE_URL}models/room.glb`, gltf => {
@@ -250,6 +254,7 @@ function frame(now: number) {
   sun.intensity = 0.2 + daylight * 1.1
   hemi.intensity = 0.25 + daylight * 0.4
   for (const l of lampLights) l.intensity = (1 - daylight) * 4
+  fireLight.intensity = (1 - daylight) * (7 + Math.sin(now * 0.017) * 1.2 + Math.sin(now * 0.041) * 0.8)
   if (doorLeaf) {
     const near = agents.some(a => dist(a.pos, world.door) < 1.3)
     doorOpen += ((near ? 1 : 0) - doorOpen) * (1 - Math.exp(-dt * 7))

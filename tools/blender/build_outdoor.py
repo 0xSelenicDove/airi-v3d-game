@@ -15,6 +15,7 @@ spans x -5..5 and z -4..4. Blender is z-up, so a game point (gx, gz) at height h
 Everything is flat-shaded low poly with a handful of plain materials, merged into one mesh per material,
 so the whole scenery is a few draw calls. The scenery stays outside the room's footprint, and the fence and
 the stepping stones leave the door on the right wall (x = 5, z = 3) free, so nothing here touches pathfinding.
+Beyond the gate in the fence a path leads to a meadow with a pond, a bench and a campfire.
 """
 
 import bpy
@@ -73,6 +74,11 @@ PALETTE = {
     'flower_wht':  0xf6f3ea,
     'mail_red':    0xc8432f,
     'wood':        0xb98756,
+    'water':       0x5aa6d6,
+    'flame':       0xf59a2f,
+    'ember':       0xd9552b,
+    'duck':        0xfaf7ef,
+    'beak':        0xf2b134,
 }
 
 materials = {}
@@ -175,6 +181,13 @@ rng = random.Random(7)
 FX, FZ0, FZ1 = 11.0, -9.5, 9.0  # fence: x -11..11, z -9.5..9
 DOOR_Z = 3.0                    # the door is on the right wall (x = 5) at z = 3
 GATE = 1.3                      # half width of the gap in the right-hand fence
+# the meadow beyond the gate, and the area agents may walk in: the yard plus a strip east of the fence
+MEADOW = (23.3, 1.3, 8.0)       # centre x, z and radius of the grassy clearing
+POND = (23.0, 3.4, 2.0)         # centre x, z and radius
+BENCH2 = (23.0, -0.7)           # faces the pond (+z)
+FIRE = (27.6, -1.2)
+# z0 puts a navigation cell centre exactly on the door line (z = 3), the doorway is only two cells wide
+AREA = {'x0': -FX, 'x1': 31.0, 'z0': -11.5, 'z1': 12.5}
 
 
 def in_yard(x, z, margin=0.0):
@@ -192,6 +205,15 @@ def obstacle(cx, cz, w, d):
 
 def r3(v):
     return round(v, 3)
+
+
+def patch(batch, cx, cz, rx, rz, h, n=36, wobble=0.04):
+    """a flat, slightly irregular ellipse on the ground at height h"""
+    pts = []
+    for i in range(n):
+        a = i * 2 * math.pi / n
+        pts.append(P(cx + math.cos(a) * rx * (1 + wobble * math.sin(a * 5)), cz + math.sin(a) * rz * (1 + wobble * math.cos(a * 3)), h))
+    batch.poly(list(reversed(pts)))
 
 
 # ---- ground ----
@@ -212,11 +234,16 @@ B['grass_yard'].poly(list(reversed(yard_pts)))
 B['path'].box(P(6.075, DOOR_Z, -0.10), (1.65, 2.0, 0.16))
 x = 7.4
 n = 0
-while x < 30:
+while x < 16.5:
     z = DOOR_Z + 1.1 * math.sin((x - 7.4) * 0.28)
     B['path'].frustum(P(x, z, -0.17), 0.55 + rng.uniform(-0.06, 0.08), 0.5, 0.1, sides=8, rot=rng.uniform(0, 1))
     x += 0.95 + rng.uniform(-0.1, 0.15)
     n += 1
+
+# ---- the meadow: a lighter clearing with a pond (its surface is 2 cm above the clearing, which is 2 cm
+# above the yard it overlaps, so no two flat faces share a height) ----
+patch(B['grass_yard'], MEADOW[0], MEADOW[1], MEADOW[2], MEADOW[2] * 1.15, -0.14)
+patch(B['water'], POND[0], POND[1], POND[2], POND[2] * 0.85, -0.12, n=24, wobble=0.06)
 
 # ---- fence around the yard, with a gate gap on the right ----
 post_h, rail_h = 0.95, (0.35, 0.7)
@@ -291,6 +318,8 @@ while count < 90 and tries < 6000:
     # keep the straight-on view from the windows and the path to the door a little open
     if abs(z - DOOR_Z) < 2.2 and x > 0:
         continue
+    if (x - MEADOW[0]) ** 2 + (z - MEADOW[1]) ** 2 < (MEADOW[2] * 1.15 + 1.5) ** 2:
+        continue
     if rng.random() > 0.9 - 0.8 * (math.hypot(x, z) / 62):
         continue
     s = rng.uniform(0.8, 1.55)
@@ -299,6 +328,8 @@ while count < 90 and tries < 6000:
         continue
     (round_tree if rng.random() < 0.55 else pine_tree)(x, z, s)
     placed.append((x, z, r))
+    if FX < x < AREA['x1'] - 0.5 and AREA['z0'] + 0.5 < z < AREA['z1'] - 0.5:
+        obstacle(x, z, 0.6, 0.6)  # the trunk, in the strip east of the fence
     count += 1
 print('trees:', count + 3)
 
@@ -339,12 +370,18 @@ B['mail_red'].box(P(mx, mz, 1.2 - 0.19), (0.5, 0.26, 0.28))
 obstacle(mx, mz, 0.5, 0.3)
 
 # the bench seat is 0.46 m above the room floor, the height the avatar's sitting pose expects (src/avatar.ts)
+
+
+def bench(bx, bz):
+    B['wood'].box(P(bx, bz, 0.43), (1.5, 0.45, 0.07))
+    B['wood'].box(P(bx, bz - 0.2, 0.76), (1.5, 0.07, 0.4))
+    for dx in (-0.65, 0.65):
+        B['wood'].box(P(bx + dx, bz, 0.115), (0.08, 0.4, 0.57))
+    obstacle(bx, bz, 1.5, 0.5)
+
+
 bx0, bz0 = BENCH
-B['wood'].box(P(bx0, bz0, 0.43), (1.5, 0.45, 0.07))
-B['wood'].box(P(bx0, bz0 - 0.2, 0.76), (1.5, 0.07, 0.4))
-for dx in (-0.65, 0.65):
-    B['wood'].box(P(bx0 + dx, bz0, 0.115), (0.08, 0.4, 0.57))
-obstacle(bx0, bz0, 1.5, 0.5)
+bench(bx0, bz0)
 
 vx, vz = PATCH                     # vegetable patch on the left side
 B['soil'].box(P(vx, vz, -0.1), (2.6, 1.8, 0.2))
@@ -352,6 +389,30 @@ for i in range(4):
     for j in range(3):
         B['veg'].blob(P(vx - 0.9 + i * 0.6, vz - 0.6 + j * 0.6, 0.12), (0.2, 0.2, 0.18), rot=rng.uniform(0, 3))
 obstacle(vx, vz, 2.6, 1.8)
+
+# ---- meadow props: a second bench facing the pond, rocks round the pond, ducks, a campfire ----
+bench(*BENCH2)
+obstacle(POND[0], POND[1], POND[2] * 2 * 0.95, POND[2] * 2 * 0.95)
+for i in range(11):
+    a = i * 2 * math.pi / 11 + rng.uniform(-0.15, 0.15)
+    rr = POND[2] * rng.uniform(0.98, 1.12)
+    sr = rng.uniform(0.16, 0.28)
+    B['rock'].blob(P(POND[0] + math.cos(a) * rr, POND[1] + math.sin(a) * rr * 0.9, sr * 0.3 - 0.12),
+                   (sr, sr * 0.9, sr * 0.6), rot=rng.uniform(0, 3), jitter=0.15, rng=rng)
+for dx, dz in ((-0.6, -0.3), (0.5, 0.5), (0.2, -0.8)):  # ducks
+    B['duck'].blob(P(POND[0] + dx, POND[1] + dz, -0.07), (0.2, 0.15, 0.13), rot=rng.uniform(0, 3))
+    B['duck'].blob(P(POND[0] + dx, POND[1] + dz + 0.14, 0.05), (0.09, 0.09, 0.09))
+    B['beak'].box(P(POND[0] + dx, POND[1] + dz + 0.25, 0.04), (0.05, 0.08, 0.03))
+
+fx_, fz_ = FIRE
+for i in range(7):  # ring of stones
+    a = i * 2 * math.pi / 7
+    B['rock'].blob(P(fx_ + math.cos(a) * 0.55, fz_ + math.sin(a) * 0.55, 0.0), (0.16, 0.16, 0.12), rot=a, jitter=0.1, rng=rng)
+for k in range(3):  # three logs crossed over each other
+    B['trunk'].box(P(fx_, fz_, -0.1 + 0.05 * k), (0.7, 0.11, 0.1), rot=k * math.pi / 3 + 0.2)
+B['ember'].frustum(P(fx_, fz_, 0.12), 0.32, 0.12, 0.28, sides=7)
+B['flame'].frustum(P(fx_, fz_, 0.22), 0.22, 0.0, 0.55, sides=6, rot=0.4)
+obstacle(fx_, fz_, 1.3, 1.3)
 
 # ---- what agents can do outside (game coordinates; see room-layout.json for the indoor ones) ----
 # `hours` limits an activity to part of the day [from, to) and may wrap past midnight.
@@ -380,6 +441,16 @@ for k, sx_ in enumerate((-0.4, 0.4), 1):
               [aff('relax', 45, {'fun': 18, 'energy': 8}, 'sit', DAY),
                aff('read', 60, {'knowledge': 22, 'fun': 8, 'energy': -2}, 'sit', DAY)],
               approach=(hx, bz0 + 0.225 + 0.5))
+for k, sx_ in enumerate((-0.4, 0.4), 1):
+    hx = BENCH2[0] + sx_
+    place_obj(f'pond_bench_seat_{k}', 'pond bench seat', (hx, BENCH2[1] + 3.0), (hx, BENCH2[1] + 0.12),
+              [aff('relax', 45, {'fun': 20, 'energy': 8}, 'sit', DAY),
+               aff('read', 60, {'knowledge': 22, 'fun': 8, 'energy': -2}, 'sit', DAY)],
+              approach=(hx, BENCH2[1] + 0.225 + 0.5))
+place_obj('pond', 'duck pond', (POND[0], POND[1]), (POND[0] - 2.1, POND[1] - 1.9),
+          [aff('watch_ducks', 20, {'fun': 12, 'energy': 2}, 'stand', DAY)])
+place_obj('campfire', 'campfire', FIRE, (FIRE[0] - 1.1, FIRE[1]),
+          [aff('warm_up', 30, {'fun': 14, 'energy': 5}, 'stand', [17, 24])])
 place_obj('garden', 'vegetable garden', (vx, vz), (vx, vz + 0.9 + 0.4),
           [aff('tend_garden', 40, {'fun': 12, 'knowledge': 6, 'energy': -6}, 'stand', DAY)])
 place_obj('mailbox', 'mailbox', (mx, mz), (mx - 0.7, mz),
@@ -427,8 +498,10 @@ print('exported', out_glb, os.path.getsize(out_glb) // 1024, 'KB')
 
 yard = {
     'about': 'Generated by tools/blender/build_outdoor.py. Game coordinates (three.js): x right, y up, z toward '
-             'the camera. Agents stay inside the fence; the only way in and out of the house is the door.',
-    'yard': {'x0': -FX, 'x1': FX, 'z0': FZ0, 'z1': FZ1},
+             'the camera. The only way out of the house is the door, and out of the yard the gate in the fence.',
+    'yard': {'x0': -FX, 'x1': FX, 'z0': FZ0, 'z1': FZ1},  # the fenced yard
+    'gate': {'x': FX, 'z': DOOR_Z, 'halfWidth': 1.0},      # the gap in its right-hand side
+    'area': AREA,                                           # everything agents may walk in
     'door': {'x': 5.0, 'z': DOOR_Z, 'halfWidth': 0.25},
     'obstacles': OBSTACLES,
     'objects': OBJECTS,

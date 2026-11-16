@@ -15,8 +15,12 @@ export class World {
   private occupancy = new Map<string, string>()
   /** the house: 10 x 8 m, centred on the origin */
   readonly bounds = { w: layout.room.w, d: layout.room.d }
-  /** the fenced yard around it; agents never leave it */
+  /** the fenced yard around the house */
   readonly yard = yardLayout.yard
+  /** the gap in the fence, the only way between the yard and the meadow beyond */
+  readonly gate = yardLayout.gate
+  /** everything agents may walk in: the yard and a strip of meadow east of the fence */
+  readonly area = yardLayout.area
   /** the doorway in the right-hand wall, the only way between house and yard */
   readonly door = yardLayout.door
   /** floor areas of all furniture, trees, bushes and so on that block walking */
@@ -25,25 +29,30 @@ export class World {
     ...yardLayout.obstacles,
   ]
 
-  // ---- navigation grid: covers the whole yard, the house walls are blocked except at the door ----
+  // ---- navigation grid: the whole walkable area; house walls and the fence are blocked except at the door and the gate ----
   readonly cell = 0.2
   readonly agentRadius = 0.35
-  private nx = Math.round((this.yard.x1 - this.yard.x0) / this.cell)
-  private nz = Math.round((this.yard.z1 - this.yard.z0) / this.cell)
+  private nx = Math.round((this.area.x1 - this.area.x0) / this.cell)
+  private nz = Math.round((this.area.z1 - this.area.z0) / this.cell)
   private blocked = new Uint8Array(this.nx * this.nz)
 
-  private cx(i: number) { return this.yard.x0 + (i + 0.5) * this.cell }
-  private cz(j: number) { return this.yard.z0 + (j + 0.5) * this.cell }
-  private ci(x: number) { return Math.floor((x - this.yard.x0) / this.cell) }
-  private cj(z: number) { return Math.floor((z - this.yard.z0) / this.cell) }
+  private cx(i: number) { return this.area.x0 + (i + 0.5) * this.cell }
+  private cz(j: number) { return this.area.z0 + (j + 0.5) * this.cell }
+  private ci(x: number) { return Math.floor((x - this.area.x0) / this.cell) }
+  private cj(z: number) { return Math.floor((z - this.area.z0) / this.cell) }
 
   private buildGrid() {
     const r = this.agentRadius, hw = this.bounds.w / 2, hd = this.bounds.d / 2
-    const t = layout.room.wallThickness, y = this.yard, door = this.door
+    const t = layout.room.wallThickness, y = this.yard, a = this.area, door = this.door, gate = this.gate
+    const rail = 0.06 // half thickness of the fence
     for (let j = 0; j < this.nz; j++) for (let i = 0; i < this.nx; i++) {
       const x = this.cx(i), z = this.cz(j)
-      // keep clear of the fence
-      let b = x < y.x0 + r || x > y.x1 - r || z < y.z0 + r || z > y.z1 - r
+      // keep clear of the edge of the area
+      let b = x < a.x0 + r || x > a.x1 - r || z < a.z0 + r || z > a.z1 - r
+      // west of the fence line the yard is bounded by the fence on the other three sides
+      if (x < y.x1 && (z < y.z0 + r || z > y.z1 - r)) b = true
+      // the right-hand fence, with the gate
+      if (Math.abs(x - y.x1) < r + rail && z > y.z0 - r && z < y.z1 + r && Math.abs(z - gate.z) > gate.halfWidth) b = true
       // the house: free inside (clear of the walls), blocked in the wall ring around it
       const ax = Math.abs(x), az = Math.abs(z)
       if (ax <= hw + t + r && az <= hd + t + r && !(ax <= hw - r && az <= hd - r)) b = true

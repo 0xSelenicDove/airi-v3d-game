@@ -4,6 +4,7 @@ import type { Action, Brain, NeedName, Observation, Persona } from './types'
 const VERB_NEED: Record<string, NeedName> = {
   use_computer: 'fun', relax: 'fun', read: 'knowledge', eat: 'energy', grab_snack: 'energy', cook: 'energy',
   tend_garden: 'fun', check_mail: 'fun', admire_flowers: 'fun', enjoy_fresh_air: 'fun', stargaze: 'fun',
+  watch_ducks: 'fun', warm_up: 'fun',
 }
 /** a little nudge to go out when the weather is the same all day: being outside is a nice change */
 const OUTSIDE_BONUS = 12
@@ -111,10 +112,10 @@ export class LLMBrain implements Brain {
       .filter(o => !o.inUseBy)
       .flatMap(o => o.verbs.map(v => `{"type":"interact","object":"${o.id}","verb":"${v}"}`))
     const system =
-      `You are ${p.name}, an AI living in a small house with a fenced yard in a 3D world. ${p.description}\n` +
+      `You are ${p.name}, an AI living in a small house with a fenced yard, and a meadow with a pond and a campfire beyond the gate, in a 3D world. ${p.description}\n` +
       `You live a natural daily life: sleep at night, and spend your day on things you enjoy. Needs (0-100, low = urgent): energy, fun, knowledge.\n` +
-      `Your bed is "${obs.yourBed}". Objects marked inUseBy are taken by someone else. Objects marked "outside":true are in the yard: ` +
-      `you walk out through the door to use them, so they are a nice change in good daylight. Some activities are only offered at certain hours.\n` +
+      `Your bed is "${obs.yourBed}". Objects marked inUseBy are taken by someone else. Objects marked "outside":true are outside the house: ` +
+      `you walk out through the door (and the gate, for the meadow) to use them, so they are a nice change in good daylight. Some activities are only offered at certain hours.\n` +
       `You share the house with others (see "others"); "heard" shows what they said to you. Be natural, not repetitive.\n` +
       `"memories" are things you recall that relate to the moment; "insights" are your own conclusions about your life. Let them shape your choices and what you say.\n\n` +
       `Choose ONE next action. Your reply MUST be exactly one JSON object with a "thought" key (one short sentence) plus ONE of these action shapes, copied exactly:\n` +
