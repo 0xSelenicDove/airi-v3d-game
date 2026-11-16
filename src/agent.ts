@@ -97,6 +97,7 @@ export class Agent {
       time: this.world.clock,
       hour: this.world.hour,
       location: `(${this.pos.x.toFixed(1)}, ${this.pos.z.toFixed(1)})`,
+      place: this.world.placeOf(this.pos),
       needs: { ...this.needs },
       objects: this.world.objects.map(o => ({
         id: o.id, kind: o.kind, verbs: o.affordances.filter(a => this.world.isAvailable(a)).map(a => a.verb),

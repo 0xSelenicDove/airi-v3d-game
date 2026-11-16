@@ -8,6 +8,8 @@ const VERB_NEED: Record<string, NeedName> = {
 }
 /** a little nudge to go out when the weather is the same all day: being outside is a nice change */
 const OUTSIDE_BONUS = 12
+/** chance per decision, on an evening, to head for the campfire */
+const CAMP_CHANCE = 0.2
 /** chores (washing, laundry, changing clothes) win only now and then */
 const CHORE_SCORE = 25
 
@@ -39,10 +41,21 @@ export class MockBrain implements Brain {
     if (obs.heard.length && Math.random() < 0.6) return { type: 'say', text: pick(['Oh, hi!', 'Yeah, same here.', 'How is your day going?']), thought: `${obs.others[0]?.name ?? 'Someone'} spoke to me` }
     if (obs.others.length && Math.random() < 0.12) return { type: 'say', text: pick(['Hello!', 'What are you up to?', 'Nice room, huh?']) }
     if (n.energy < 20 || (inSleepWindow && n.energy < 80)) {
-      // now and then, camp out in the tent instead of the own bed
+      // out camping, the tent is right there; otherwise camp out only now and then
       const cot = obs.objects.find(o => !o.inUseBy && o.verbs.includes('sleep_in_tent'))
-      if (cot && Math.random() < 0.3) return { type: 'interact', object: cot.id, verb: 'sleep_in_tent', thought: 'It is a nice night, I will sleep in the tent.' }
+      if (cot && Math.random() < (obs.place === 'meadow' ? 0.85 : 0.1)) {
+        return { type: 'interact', object: cot.id, verb: 'sleep_in_tent', thought: 'It is a nice night, I will sleep in the tent.' }
+      }
       return { type: 'interact', object: obs.yourBed, verb: 'sleep' }
+    }
+    // some evenings, go camping: an evening by the campfire, and then the tent
+    if (obs.hour >= 17 && obs.hour < 23 && Math.random() < CAMP_CHANCE) {
+      const fire = obs.objects.filter(o => !o.inUseBy && o.verbs.some(v => v === 'sit_by_fire' || v === 'warm_up'))
+      const spot = pick(fire)
+      if (spot) {
+        const verb = spot.verbs.find(v => v === 'sit_by_fire' || v === 'warm_up')!
+        return { type: 'interact', object: spot.id, verb, thought: 'What a lovely evening, I will go and sit by the campfire.' }
+      }
     }
     // every free activity in the room, scored by how much the agent needs what it gives
     const scores: [number, Action][] = obs.objects
@@ -120,7 +133,8 @@ export class LLMBrain implements Brain {
       `You are ${p.name}, an AI living in a small house with a fenced yard, and a meadow with a pond a campfire and a tent with two cots beyond the gate, in a 3D world. ${p.description}\n` +
       `You live a natural daily life: sleep at night, and spend your day on things you enjoy. Needs (0-100, low = urgent): energy, fun, knowledge.\n` +
       `Your bed is "${obs.yourBed}". Objects marked inUseBy are taken by someone else. Objects marked "outside":true are outside the house: ` +
-      `you walk out through the door (and the gate, for the meadow) to use them, so they are a nice change in good daylight. Some activities are only offered at certain hours.\n` +
+      `you walk out through the door (and the gate, for the meadow) to use them, so they are a nice change in good daylight. ` +
+      `"place" tells you where you are. Now and then you may go camping: spend the evening by the campfire, then sleep in the tent (once you are in the meadow that is easier than walking home). Some activities are only offered at certain hours.\n` +
       `You share the house with others (see "others"); "heard" shows what they said to you. Be natural, not repetitive.\n` +
       `"memories" are things you recall that relate to the moment; "insights" are your own conclusions about your life. Let them shape your choices and what you say.\n\n` +
       `Choose ONE next action. Your reply MUST be exactly one JSON object with a "thought" key (one short sentence) plus ONE of these action shapes, copied exactly:\n` +

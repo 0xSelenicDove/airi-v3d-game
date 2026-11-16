@@ -55,7 +55,7 @@ describe('coerceAction', () => {
 describe('MockBrain camping', () => {
   const persona = { name: 'Airi', description: '', color: 0, sleepWindow: [0, 8] as [number, number], bed: 'bed2' }
   const night = {
-    hour: 3, needs: { energy: 30, fun: 50, knowledge: 50 }, yourBed: 'bed2', heard: [], others: [],
+    hour: 3, place: 'house', needs: { energy: 30, fun: 50, knowledge: 50 }, yourBed: 'bed2', heard: [], others: [],
     objects: [
       { id: 'bed2', kind: 'bed', verbs: ['sleep'] },
       { id: 'tent_cot_1', kind: 'camp cot', verbs: ['sleep_in_tent', 'rest_in_tent'], outside: true },
@@ -68,6 +68,26 @@ describe('MockBrain camping', () => {
       return new MockBrain().decide(persona, night).finally(() => spy.mockRestore())
     }
     expect(await roll(0.99)).toMatchObject({ object: 'bed2', verb: 'sleep' })
-    expect(await roll(0.2)).toMatchObject({ object: 'tent_cot_1', verb: 'sleep_in_tent' })
+    expect(await roll(0.05)).toMatchObject({ object: 'tent_cot_1', verb: 'sleep_in_tent' })
+  })
+
+  it('prefers the tent once it is already at the camp', async () => {
+    const spy = vi.spyOn(Math, 'random').mockReturnValue(0.5)
+    const home = await new MockBrain().decide(persona, night)
+    const camp = await new MockBrain().decide(persona, { ...night, place: 'meadow' } as Observation)
+    spy.mockRestore()
+    expect(home).toMatchObject({ verb: 'sleep', object: 'bed2' })
+    expect(camp).toMatchObject({ verb: 'sleep_in_tent' })
+  })
+
+  it('goes to the campfire on some evenings', async () => {
+    const evening = {
+      ...night, hour: 19, needs: { energy: 70, fun: 60, knowledge: 50 },
+      objects: [...(night as Observation).objects, { id: 'log_seat_1', kind: 'log seat', verbs: ['sit_by_fire'], outside: true }],
+    } as Observation
+    const spy = vi.spyOn(Math, 'random').mockReturnValue(0.05)
+    const a = await new MockBrain().decide(persona, evening)
+    spy.mockRestore()
+    expect(a).toMatchObject({ object: 'log_seat_1', verb: 'sit_by_fire' })
   })
 })

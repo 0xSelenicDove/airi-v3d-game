@@ -179,6 +179,13 @@ export class World {
 
   find(id: string) { return this.objects.find(o => o.id === id) }
 
+  /** which part of the world a point is in */
+  placeOf(p: Vec2): 'house' | 'yard' | 'meadow' {
+    const t = layout.room.wallThickness
+    if (Math.abs(p.x) < this.bounds.w / 2 + t && Math.abs(p.z) < this.bounds.d / 2 + t) return 'house'
+    return p.x > this.yard.x1 ? 'meadow' : 'yard'
+  }
+
   /** Is this activity possible at the current hour? (Some only make sense by day or by night.) */
   isAvailable(aff: Affordance, hour = this.hour) {
     if (!aff.hours) return true

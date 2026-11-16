@@ -51,6 +51,8 @@ export interface Observation {
   time: string // "Day 1 14:05"
   hour: number
   location: string
+  /** where you are: in the house, the fenced yard, or the meadow beyond the gate (campfire, tent, pond) */
+  place: 'house' | 'yard' | 'meadow'
   needs: Needs
   objects: { id: string; kind: string; verbs: string[]; inUseBy?: string; /** set for things in the yard */ outside?: true }[]
   /** other inhabitants and what they are doing */
