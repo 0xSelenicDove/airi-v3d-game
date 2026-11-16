@@ -881,10 +881,10 @@
     }
   ],
   "stats": {
-    "meshes": 50,
-    "triangles": 8607,
-    "drawCalls": 132,
-    "materials": 22
+    "meshes": 70,
+    "triangles": 9405,
+    "drawCalls": 158,
+    "materials": 43
   },
   "checks": {
     "errors": [],

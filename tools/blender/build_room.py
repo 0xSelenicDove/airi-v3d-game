@@ -89,15 +89,20 @@ def srgb(hexcolor):
 
 RECOLOR = {
     # name: (Kenney material it replaces, sRGB colour)
-    'fabric_blue': ('carpet', '#6f86d6'),
-    'fabric_pink': ('carpet', '#e08aa6'),
-    'fabric_sage': ('carpet', '#8fa38c'),
-    'fabric_mustard': ('carpet', '#d9a441'),
+    # cosy palette: sage and dusty-blue walls, pale oak, terracotta, teal and mustard textiles
+    'fabric_teal': ('carpet', '#4f8f98'),
+    'fabric_coral': ('carpet', '#e08a78'),
+    'fabric_terracotta': ('carpet', '#c9694c'),
+    'fabric_mustard': ('carpet', '#e0ae45'),
     'fabric_charcoal': ('carpet', '#4a4f57'),
-    'rug_cream': ('carpet', '#e9dcc6'),
-    'rug_cream_edge': ('carpetDarker', '#cdb894'),
-    'floor_oak': ('wood', '#c49a6c'),
-    'wall_paint': ('_defaultMat', '#f1ece4'),
+    'rug_cream': ('carpet', '#efe3cb'),
+    'rug_cream_edge': ('carpetDarker', '#5a8f94'),
+    'floor_oak': ('wood', '#dcbd91'),
+    'floor_tile': ('wood', '#e4ded2'),
+    'wall_back': ('_defaultMat', '#b9cdb6'),
+    'wall_left': ('_defaultMat', '#c9d6e3'),
+    'wall_front': ('_defaultMat', '#f3ecdf'),
+    'wall_right': ('_defaultMat', '#f3ecdf'),
 }
 
 
@@ -225,42 +230,41 @@ SHELL = dict(blocks=False, group='shell')
 for i in range(5):
     for j in range(4):
         place(f'floor_{i}_{j}', 'floorFull', 'floor', h=-0.1, x0=-HW + 2 * i, z0=-HD + 2 * j,
-              recolor={'wood': 'floor_oak'}, collide=False, **SHELL)
+              recolor={'wood': 'floor_tile' if i == 4 and j >= 1 else 'floor_oak'}, collide=False, **SHELL)
 WALL_T = 0.1
-WALL_RECOLOR = {'_defaultMat': 'wall_paint'}
 back = ['wall', 'wallWindow', 'wallWindow', 'wall', 'wall']  # x -5..5, 2 m each
 for i, m in enumerate(back):
     xa = -HW + 2 * i
     end = i in (0, len(back) - 1)
     sx = K * (2 + WALL_T) / 2 if end else K
-    place(f'wall_back_{i}', m, 'wall', facing='+z', scale=(sx, K, K), cz=-HD - WALL_T / 2, recolor=WALL_RECOLOR,
+    place(f'wall_back_{i}', m, 'wall', facing='+z', scale=(sx, K, K), cz=-HD - WALL_T / 2, recolor={'_defaultMat': 'wall_back'},
           **({'x0': xa - WALL_T} if i == 0 else {'x1': xa + 2 + WALL_T} if end else {'x0': xa}), **SHELL)
 for i in range(5):
     xa = -HW + 2 * i
     end = i in (0, 4)
     sx = K * (2 + WALL_T) / 2 if end else K
-    place(f'wall_front_{i}', 'wall', 'wall', facing='-z', scale=(sx, K, K), cz=HD + WALL_T / 2, recolor=WALL_RECOLOR,
+    place(f'wall_front_{i}', 'wall', 'wall', facing='-z', scale=(sx, K, K), cz=HD + WALL_T / 2, recolor={'_defaultMat': 'wall_front'},
           **({'x0': xa - WALL_T} if i == 0 else {'x1': xa + 2 + WALL_T} if end else {'x0': xa}), **SHELL)
 for j in range(4):
     place(f'wall_left_{j}', 'wall', 'wall', facing='+x', cx=-HW - WALL_T / 2, z0=-HD + 2 * j,
-          recolor=WALL_RECOLOR, **SHELL)
+          recolor={'_defaultMat': 'wall_left'}, **SHELL)
 right = ['wall', 'wall', 'wall', 'wallDoorway']  # z -4..4
 for j, m in enumerate(right):
-    place(f'wall_right_{j}', m, 'wall', facing='-x', cx=HW + WALL_T / 2, z0=-HD + 2 * j, recolor=WALL_RECOLOR, **SHELL)
+    place(f'wall_right_{j}', m, 'wall', facing='-x', cx=HW + WALL_T / 2, z0=-HD + 2 * j, recolor={'_defaultMat': 'wall_right'}, **SHELL)
 door = place('door', 'doorwayFront', 'door', facing='-x', cx=HW + WALL_T / 2, cz=-HD + 7.0, **SHELL)
 
 # ============================================================================================
 # sleeping area: two single beds, nightstand, wardrobe
 # ============================================================================================
 bed1 = place('bed', 'bedSingle', 'bed', facing='+x', x0=-HW + 0.01, z0=-HD + 0.01,
-             recolor={'carpet': 'fabric_blue'})
+             recolor={'carpet': 'fabric_teal'})
 a = bed1.aabb()
 ns = place('nightstand', 'cabinetBedDrawerTable', 'nightstand', facing='+x', x0=-HW + 0.01, z0=a[3] + 0.04)
 nsa = ns.aabb()
 place('bedside_lamp', 'lampRoundTable', 'table lamp', facing='+x', cx=(nsa[0] + nsa[1]) / 2,
       cz=(nsa[2] + nsa[3]) / 2, h=nsa[5] + 0.002, blocks=False)
 bed2 = place('bed2', 'bedSingle', 'bed', facing='+x', x0=-HW + 0.01, z0=nsa[3] + 0.04,
-             recolor={'carpet': 'fabric_pink'})
+             recolor={'carpet': 'fabric_coral'})
 b2 = bed2.aabb()
 wr1 = place('wardrobe', 'bookcaseClosedDoors', 'wardrobe', facing='+x', x0=-HW + 0.01, z0=b2[3] + 0.5)
 wa = wr1.aabb()
@@ -282,7 +286,7 @@ place('reading_lamp', 'lampRoundFloor', 'floor lamp', facing='+x', x0=-HW + 0.05
 # Remove the depth scale when the sitting pose bends the knees over the seat edge.
 SEAT_DEPTH = (K, K * 0.75, K)
 sofa = place('sofa', 'loungeSofa', 'sofa', facing='+z', cx=-0.0, z0=-HD + 0.06, scale=SEAT_DEPTH,
-             recolor={'carpet': 'fabric_sage'})
+             recolor={'carpet': 'fabric_terracotta'})
 sa = sofa.aabb()
 ct = place('coffee_table', 'tableCoffee', 'coffee table', facing='+z', cx=0.0, z0=sa[3] + 1.0)
 cta = ct.aabb()
@@ -733,6 +737,108 @@ join('Walls_Back', [i for i in ITEMS if i.startswith('wall_back_')])
 join('Walls_Left', [i for i in ITEMS if i.startswith('wall_left_')])
 join('Walls_Right', [i for i in ITEMS if i.startswith('wall_right_')])
 join('Walls_Front', [i for i in ITEMS if i.startswith('wall_front_')])
+
+# ============================================================================================
+# decor: baseboards, curtains, wall art, cushions, rugs, small plants. Visual only: not in the layout
+# file, not walkable obstacles and not part of the clipping checks.
+# ============================================================================================
+DECOR = {}
+
+
+def decor_batch(name, hexcolor):
+    if name not in DECOR:
+        m = bpy.data.materials.new('decor_' + name)
+        m.use_nodes = True
+        bsdf = next(n for n in m.node_tree.nodes if n.type == 'BSDF_PRINCIPLED')
+        bsdf.inputs['Base Color'].default_value = (*srgb(hexcolor), 1.0)
+        bsdf.inputs['Roughness'].default_value = 0.85
+        bsdf.inputs['Metallic'].default_value = 0.0
+        DECOR[name] = (m, bmesh.new())
+    return DECOR[name][1]
+
+
+def dbox(name, hexcolor, cx, cz, h0, sx, sz, sh, rot=0.0):
+    """box centred on game point (cx, cz), bottom at h0, sizes (x, z, height), turned about the vertical by rot"""
+    bm = decor_batch(name, hexcolor)
+    c = g2b(cx, cz, h0 + sh / 2)
+    R = Matrix.Rotation(rot, 3, 'Z')
+    v = [bm.verts.new(c + R @ Vector((x * sx / 2, y * sz / 2, z * sh / 2)))
+         for z in (-1, 1) for y in (-1, 1) for x in (-1, 1)]
+    for q in ((0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)):
+        bm.faces.new([v[i] for i in q])
+
+
+def wall_box(name, hexcolor, wall, along, h0, w, h, depth, off=0.0):
+    """flat box on the inside of the 'back' (along = x) or 'left' (along = z) wall"""
+    if wall == 'back':
+        dbox(name, hexcolor, along, -HD + off + depth / 2, h0, w, depth, h)
+    else:
+        dbox(name, hexcolor, -HW + off + depth / 2, along, h0, depth, w, h)
+
+
+def picture(wall, along, hc, w, h, art):
+    """framed abstract print: white frame, cream mat, and a few coloured shapes (art = list of colours)"""
+    wall_box('frame', '#f7f3ea', wall, along, hc - h / 2, w, h, 0.035)
+    wall_box('mat', '#efe6d2', wall, along, hc - h / 2 + 0.04, w - 0.08, h - 0.08, 0.04)
+    wall_box(f'art_{art[0]}', art[0], wall, along - w * 0.16, hc - h * 0.3, w * 0.22, h * 0.5, 0.045)
+    wall_box(f'art_{art[1]}', art[1], wall, along + w * 0.16, hc - h * 0.12, w * 0.22, h * 0.3, 0.045)
+    wall_box(f'art_{art[2]}', art[2], wall, along, hc + h * 0.18, w * 0.12, w * 0.12, 0.045)
+
+
+# baseboards on all four walls (the right one stops short of the door)
+BASE = '#f7f3ea'
+wall_box('base', BASE, 'back', 0.0, 0.0, ROOM_W, 0.12, 0.022)
+wall_box('base', BASE, 'left', 0.0, 0.0, ROOM_D, 0.12, 0.022)
+dbox('base', BASE, 0.0, HD - 0.011, 0.0, ROOM_W, 0.022, 0.12)
+dbox('base', BASE, HW - 0.011, (-HD + 2.4) / 2, 0.0, 0.022, 2.4 + HD, 0.12)
+dbox('base', BASE, HW - 0.011, (3.6 + HD) / 2, 0.0, 0.022, HD - 3.6, 0.12)
+
+# curtains on the two back windows: a rod, and a panel on each side and between them
+# (window openings: x -2.47..-1.53 and -0.47..0.47, sill 0.88 m, head 2.02 m)
+CURT = '#f1d9a8'
+dbox('rod', '#5b4636', -1.0, -HD + 0.1, 2.28, 4.0, 0.03, 0.03)
+for cxp, wd in ((-2.74, 0.34), (-1.0, 0.5), (0.74, 0.34)):
+    dbox('curtain', CURT, cxp, -HD + 0.06, 0.98, wd, 0.08, 1.3)
+    dbox('curtain_fold', '#e3c78b', cxp + wd * 0.18, -HD + 0.105, 0.98, wd * 0.18, 0.02, 1.3)
+
+# wall art above the beds, and beside the desk
+picture('left', -3.42, 1.7, 0.7, 0.5, ('#4f8f98', '#e08a78', '#e0ae45'))
+picture('left', -1.67, 1.7, 0.7, 0.5, ('#c9694c', '#4f8f98', '#efe3cb'))
+picture('back', 3.9, 1.95, 0.5, 0.65, ('#e0ae45', '#4f8f98', '#c9694c'))
+
+# cushions on the sofa ends
+sofa_a = ITEMS['sofa'].aabb()
+for sx_, col, tilt in ((-1, '#e0ae45', 0.18), (1, '#f3ead8', -0.18)):
+    dbox('cushion_' + col, col, sx_ * 0.74, sofa_a[2] + 0.27, 0.43, 0.36, 0.1, 0.36, rot=tilt)
+
+# rugs: a striped one beside the beds, a runner in the kitchen
+dbox('rug_bed', '#ecd3b0', -2.05, -2.55, 0.003, 1.1, 2.4, 0.012)
+for dz_ in (-0.9, 0.9):
+    dbox('rug_stripe', '#c9694c', -2.05, -2.55 + dz_, 0.015, 1.1, 0.1, 0.002)
+dbox('rug_kitchen', '#d9cdb8', 3.95, -0.6, 0.003, 0.9, 2.3, 0.012)
+for dz_ in (-1.0, 1.0):
+    dbox('rug_kstripe', '#5a8f94', 3.95, -0.6 + dz_, 0.015, 0.9, 0.08, 0.002)
+
+# small plants and books on the tables
+ct_a, st_a = ITEMS['coffee_table'].aabb(), ITEMS['side_table'].aabb()
+place('plant_coffee', 'plantSmall2', 'small plant', cx=-0.3, cz=(ct_a[2] + ct_a[3]) / 2, h=ct_a[5] + 0.002,
+      scale=(1.8, 1.8, 1.8), blocks=False, collide=False, group='decor')
+place('books_coffee', 'books', 'books', facing='+z', cx=0.32, cz=(ct_a[2] + ct_a[3]) / 2, h=ct_a[5] + 0.002,
+      scale=(1.4, 1.4, 1.4), blocks=False, collide=False, group='decor')
+place('plant_side', 'plantSmall2', 'small plant', cx=(st_a[0] + st_a[1]) / 2, cz=(st_a[2] + st_a[3]) / 2,
+      h=st_a[5] + 0.002, scale=(1.4, 1.4, 1.4), blocks=False, collide=False, group='decor')
+
+for name, (mat, bm) in DECOR.items():
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    me = bpy.data.meshes.new('DECOR_' + name)
+    bm.to_mesh(me)
+    bm.free()
+    me.materials.append(mat)
+    for poly in me.polygons:
+        poly.use_smooth = False
+    ob = bpy.data.objects.new('DECOR_' + name, me)
+    ROOM_COLL.objects.link(ob)
+    ob.parent = ROOT
 
 markers = bpy.data.objects.new('Interactions', None)
 markers.parent = ROOT

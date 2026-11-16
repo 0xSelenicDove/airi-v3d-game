@@ -98,6 +98,7 @@ scene.add(hemi, sun)
 // room: built by tools/blender/build_room.py from the Kenney Furniture Kit. World reads the same layout.
 // Walls between the camera and the room are hidden every frame, so the camera can orbit freely.
 const walls: { mesh: THREE.Object3D; hide: () => boolean }[] = []
+const lampLights: THREE.PointLight[] = []
 new GLTFLoader().load(`${import.meta.env.BASE_URL}models/room.glb`, gltf => {
   gltf.scene.traverse(o => {
     if (o instanceof THREE.Mesh) o.castShadow = o.receiveShadow = true
@@ -116,6 +117,17 @@ new GLTFLoader().load(`${import.meta.env.BASE_URL}models/room.glb`, gltf => {
     if (mesh) walls.push({ mesh, hide })
   }
   scene.add(gltf.scene)
+  // the lamps glow warm at night, the glow fades out with the daylight (see frame())
+  gltf.scene.updateMatrixWorld(true)
+  for (const name of ['FURN_desk_lamp', 'FURN_bedside_lamp', 'FURN_reading_lamp']) {
+    const lamp = gltf.scene.getObjectByName(name)
+    if (!lamp) continue
+    const light = new THREE.PointLight(0xffc27a, 0, 6, 2)
+    const box = new THREE.Box3().setFromObject(lamp)
+    light.position.set((box.min.x + box.max.x) / 2, box.max.y - 0.1, (box.min.z + box.max.z) / 2)
+    scene.add(light)
+    lampLights.push(light)
+  }
 }, undefined, e => console.warn('room load failed', e))
 
 // surroundings: yard, fence, trees and hills from tools/blender/build_outdoor.py. Pure scenery, no shadows
@@ -221,6 +233,7 @@ function frame(now: number) {
   ;(scene.fog as THREE.Fog).color.copy(sky)
   sun.intensity = 0.2 + daylight * 1.1
   hemi.intensity = 0.25 + daylight * 0.4
+  for (const l of lampLights) l.intensity = (1 - daylight) * 4
 
   agents.forEach((a, i) => avatars[i].update(dt, a))
   if (debug.visible) {
