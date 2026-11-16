@@ -98,7 +98,7 @@ scene.add(hemi, sun)
 // room: built by tools/blender/build_room.py from the Kenney Furniture Kit. World reads the same layout.
 // Walls between the camera and the room are hidden every frame, so the camera can orbit freely.
 const walls: { mesh: THREE.Object3D; hide: () => boolean }[] = []
-new GLTFLoader().load('/models/room.glb', gltf => {
+new GLTFLoader().load(`${import.meta.env.BASE_URL}models/room.glb`, gltf => {
   gltf.scene.traverse(o => {
     if (o instanceof THREE.Mesh) o.castShadow = o.receiveShadow = true
     // the interaction point empties are data for the build checks, not for rendering
@@ -127,7 +127,7 @@ const avatars = agents.map(a => {
 })
 // per-agent default models (public/model.vrm, public/model2.vrm); falls back to the capsule.
 // Vite's SPA fallback serves HTML for missing files, so sniff the "glTF" magic.
-const modelUrls = ['/model.vrm', '/model2.vrm']
+const modelUrls = ['model.vrm', 'model2.vrm'].map(f => import.meta.env.BASE_URL + f)
 modelUrls.forEach((u, i) => {
   if (!avatars[i]) return
   fetch(u).then(r => r.blob()).then(async b => {
