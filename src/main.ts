@@ -96,8 +96,10 @@ sun.shadow.camera.updateProjectionMatrix()
 scene.add(hemi, sun)
 
 // room: built by tools/blender/build_room.py from the Kenney Furniture Kit. World reads the same layout.
-// Walls between the camera and the room are hidden every frame, so the camera can orbit freely.
-const walls: { mesh: THREE.Object3D; hide: () => boolean }[] = []
+// Walls between the camera and the room fade to a faint ghost, so the camera can orbit freely and the door,
+// which stays solid, is still there to open.
+const GHOST = 0.08 // opacity of a wall that is in the way
+const walls: { meshes: THREE.Mesh[]; hide: () => boolean; fade: number }[] = []
 const lampLights: THREE.PointLight[] = []
 let doorLeaf: THREE.Object3D | undefined
 let doorAngle = 0
@@ -116,13 +118,16 @@ new GLTFLoader().load(`${import.meta.env.BASE_URL}models/room.glb`, gltf => {
     Walls_Right: () => camera.position.x > w / 2,
   }
   for (const [name, hide] of Object.entries(side)) {
-    const mesh = gltf.scene.getObjectByName(name)
-    if (mesh) walls.push({ mesh, hide })
-  }
-  // the door frame and leaf are cut away together with the wall they are in, instead of floating in the gap
-  for (const name of ['FURN_door', 'DOOR_leaf']) {
-    const mesh = gltf.scene.getObjectByName(name)
-    if (mesh) walls.push({ mesh, hide: side.Walls_Right })
+    const obj = gltf.scene.getObjectByName(name)
+    if (!obj) continue
+    const meshes: THREE.Mesh[] = []
+    obj.traverse(o => {
+      if (!(o instanceof THREE.Mesh)) return
+      // each wall fades on its own, so it must not share its materials with anything else
+      o.material = Array.isArray(o.material) ? o.material.map(m => m.clone()) : o.material.clone()
+      meshes.push(o)
+    })
+    walls.push({ meshes, hide, fade: 0 })
   }
   // the leaf swings open (about its hinge) when someone is at the door
   doorLeaf = gltf.scene.getObjectByName('DOOR_leaf')
@@ -277,7 +282,19 @@ function frame(now: number) {
     camera.position.add(delta)
   }
   controls.update()
-  for (const wall of walls) wall.mesh.visible = !wall.hide()
+  for (const wall of walls) {
+    wall.fade += ((wall.hide() ? 1 : 0) - wall.fade) * (1 - Math.exp(-dt * 10))
+    const f = wall.fade < 0.01 ? 0 : wall.fade > 0.99 ? 1 : wall.fade
+    for (const m of wall.meshes) {
+      m.castShadow = f < 0.5 // a ghost must not shade the room
+      for (const mat of Array.isArray(m.material) ? m.material : [m.material]) {
+        // going transparent changes the compiled shader (an opaque material forces alpha to 1)
+        if (mat.transparent !== f > 0) { mat.transparent = f > 0; mat.needsUpdate = true }
+        mat.opacity = 1 - (1 - GHOST) * f
+        mat.depthWrite = f === 0
+      }
+    }
+  }
   renderer.render(scene, camera)
   labelRenderer.render(scene, camera)
 }
