@@ -6,7 +6,7 @@ type State =
   | { k: 'idle' }
   | { k: 'thinking' }
   | { k: 'moving'; path: Vec2[]; obj: WorldObject; aff: Affordance }
-  | { k: 'doing'; obj: WorldObject; aff: Affordance; left: number }
+  | { k: 'doing'; obj: WorldObject; aff: Affordance; left: number; orbitAngle?: number }
   | { k: 'waiting'; left: number }
 
 export class Agent {
@@ -25,7 +25,7 @@ export class Agent {
   private lastResult?: string
   private inbox: string[] = []
   private claimed?: string
-  pose: 'stand' | 'sit' | 'lie' = 'stand'
+  pose: 'stand' | 'sit' | 'lie' | 'swim' = 'stand'
   heading = 0
 
   constructor(public persona: Persona, start: Vec2, private brain: Brain, private world: World) {
@@ -120,7 +120,7 @@ export class Agent {
     const s = this.state
     switch (s.k) {
       case 'idle':
-        this.pose = 'stand'
+        this.pose = this.world.inWater(this.pos) ? 'swim' : 'stand' // still in the lake: keep floating
         this.state = { k: 'thinking' }
         this.brain.decide(this.persona, this.observe()).then(a => this.apply(a)).catch(err => {
           this.lastResult = `error: ${err}`
@@ -130,14 +130,17 @@ export class Agent {
       case 'moving': {
         const target = s.path[0]
         const d = dist(this.pos, target)
-        const step = 2.2 * realDt
+        // in the lake (wading in from the shore, or swimming back out) the agent swims, slower than it walks
+        const swimming = this.world.inWater(this.pos) || (s.aff.pose === 'swim' && s.path.length === 1 && !!s.obj.approach)
+        this.pose = swimming ? 'swim' : 'stand'
+        const step = (swimming ? 1.0 : 2.2) * realDt
         if (d <= step) {
           this.pos = { ...target }
           s.path.shift()
           if (!s.path.length) {
             this.pose = s.aff.pose
             this.heading = s.aff.pose === 'lie' ? Math.PI / 2 : Math.atan2(s.obj.pos.x - target.x, s.obj.pos.z - target.z)
-            this.state = { k: 'doing', obj: s.obj, aff: s.aff, left: s.aff.duration }
+            this.state = { k: 'doing', obj: s.obj, aff: s.aff, left: s.aff.duration, orbitAngle: 0 }
             this.log(`started ${s.aff.verb} at ${s.obj.id}`, 1)
           }
         } else {
@@ -162,6 +165,14 @@ export class Agent {
         const frac = Math.min(gameDt, s.left) / s.aff.duration
         for (const [k, v] of Object.entries(s.aff.effects)) {
           this.needs[k as keyof Needs] = clamp(this.needs[k as keyof Needs] + v! * frac)
+        }
+        if (s.aff.orbit && s.orbitAngle !== undefined) {
+          // swimming laps: a circle whose east-most point is the use point, so the swimmer starts where it arrived
+          const r = s.aff.orbit
+          s.orbitAngle += (0.6 / r) * realDt
+          const a = s.orbitAngle
+          this.pos = { x: s.obj.usePos.x - r + Math.cos(a) * r, z: s.obj.usePos.z + Math.sin(a) * r }
+          this.heading = Math.atan2(-Math.sin(a), Math.cos(a))
         }
         s.left -= gameDt
         if (s.left <= 0) {

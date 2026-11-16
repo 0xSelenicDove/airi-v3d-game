@@ -179,6 +179,14 @@ export class World {
 
   find(id: string) { return this.objects.find(o => o.id === id) }
 
+  /** Is this point in the lake (and not on the pier)? Agents there swim. */
+  inWater(p: Vec2) {
+    const w = yardLayout.water, pier = yardLayout.pier
+    const dx = (p.x - w.x) / w.rx, dz = (p.z - w.z) / w.rz
+    if (dx * dx + dz * dz >= 1) return false
+    return !(Math.abs(p.x - pier.x) <= pier.w / 2 && p.z <= pier.z1)
+  }
+
   /** which part of the world a point is in */
   placeOf(p: Vec2): 'house' | 'yard' | 'meadow' {
     const t = layout.room.wallThickness

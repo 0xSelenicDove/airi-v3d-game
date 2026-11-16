@@ -10,9 +10,11 @@ export interface Affordance {
   /** total change applied to needs over the duration */
   effects: Partial<Needs>
   /** animation pose hint for the renderer */
-  pose: 'sit' | 'lie' | 'stand'
+  pose: 'sit' | 'lie' | 'stand' | 'swim'
   /** only available from hour `[0]` up to (not including) `[1]`; may wrap past midnight, e.g. [20, 5] */
   hours?: [number, number]
+  /** swim in a circle of this radius (m) while doing it; the use point is on the circle, due east of its centre */
+  orbit?: number
 }
 
 /** axis-aligned floor rectangle */

@@ -191,10 +191,11 @@ DOOR_Z = 3.0                    # the door is on the right wall (x = 5) at z = 3
 GATE = 1.3                      # half width of the gap in the right-hand fence
 # the meadow beyond the gate, and the area agents may walk in: the yard plus a strip east of the fence
 MEADOW = (23.3, 1.3, 8.0)       # centre x, z and radius of the grassy clearing
-POND = (23.0, 3.4, 2.0)         # centre x, z and radius
-BENCH2 = (23.0, -0.7)           # faces the pond (+z)
+LAKE = (21.0, 6.5, 5.0, 3.6)    # centre x, z and the two radii (x, z): too deep to wade, a place to swim and fish
+PIER = (23.0, 3.0, 6.8, 1.6)    # centre x, where it starts on land (z), where it ends in the water (z), width
+BENCH2 = (22.0, 1.4)            # faces the lake (+z)
 FIRE = (27.6, -1.2)
-TENT = (28.2, 4.3)             # ridge along x, open at the west end, closed at the east end
+TENT = (29.0, 2.6)             # ridge along x, open at the west end, closed at the east end
 # z0 puts a navigation cell centre exactly on the door line (z = 3), the doorway is only two cells wide
 AREA = {'x0': -FX, 'x1': 31.0, 'z0': -11.5, 'z1': 12.5}
 
@@ -271,10 +272,10 @@ while x < 16.5:
     x += 0.95 + rng.uniform(-0.1, 0.15)
     n += 1
 
-# ---- the meadow: a lighter clearing with a pond (its surface is 2 cm above the clearing, which is 2 cm
+# ---- the meadow: a lighter clearing with a lake (its surface is 2 cm above the clearing, which is 2 cm
 # above the yard it overlaps, so no two flat faces share a height) ----
 patch(B['grass_yard'], MEADOW[0], MEADOW[1], MEADOW[2], MEADOW[2] * 1.15, -0.14)
-patch(B['water'], POND[0], POND[1], POND[2], POND[2] * 0.85, -0.12, n=24, wobble=0.06)
+patch(B['water'], LAKE[0], LAKE[1], LAKE[2], LAKE[3], -0.12, n=44, wobble=0.0)
 
 # ---- fence around the yard, with a gate gap on the right ----
 post_h, rail_h = 0.95, (0.35, 0.7)
@@ -423,17 +424,55 @@ obstacle(vx, vz, 2.6, 1.8)
 
 # ---- meadow props: a second bench facing the pond, rocks round the pond, ducks, a campfire ----
 bench(*BENCH2)
-obstacle(POND[0], POND[1], POND[2] * 2 * 0.95, POND[2] * 2 * 0.95)
-for i in range(11):
-    a = i * 2 * math.pi / 11 + rng.uniform(-0.15, 0.15)
-    rr = POND[2] * rng.uniform(0.98, 1.12)
-    sr = rng.uniform(0.16, 0.28)
-    B['rock'].blob(P(POND[0] + math.cos(a) * rr, POND[1] + math.sin(a) * rr * 0.9, sr * 0.3 - 0.12),
-                   (sr, sr * 0.9, sr * 0.6), rot=rng.uniform(0, 3), jitter=0.15, rng=rng)
-for dx, dz in ((-0.6, -0.3), (0.5, 0.5), (0.2, -0.8)):  # ducks
-    B['duck'].blob(P(POND[0] + dx, POND[1] + dz, -0.07), (0.2, 0.15, 0.13), rot=rng.uniform(0, 3))
-    B['duck'].blob(P(POND[0] + dx, POND[1] + dz + 0.14, 0.05), (0.09, 0.09, 0.09))
-    B['beak'].box(P(POND[0] + dx, POND[1] + dz + 0.25, 0.04), (0.05, 0.08, 0.03))
+
+# the lake blocks walking, except along the pier: slices across it (0.5 m wide), and in the strip of the pier the
+# water only blocks beyond its end. (A slice uses the wider of its two edges, so the barrier is never too small.)
+lcx, lcz, lrx, lrz = LAKE
+px_, pz0, pz1, pw = PIER
+xa = lcx - lrx
+while xa < lcx + lrx - 1e-6:
+    xb = min(xa + 0.5, lcx + lrx)
+    xi = 0.0 if xa < lcx < xb else min(abs(xa - lcx), abs(xb - lcx))
+    zh = lrz * math.sqrt(max(0.0, 1 - (xi / lrx) ** 2))
+    z_lo, z_hi = lcz - zh, lcz + zh
+    if xb > px_ - pw / 2 and xa < px_ + pw / 2:
+        z_lo = pz1
+    if z_hi > z_lo:
+        obstacle((xa + xb) / 2, (z_lo + z_hi) / 2, xb - xa, z_hi - z_lo)
+    xa = xb
+
+# rocks round the edge, reeds on the shore, lily pads and ducks on the water
+for i in range(26):
+    a = i * 2 * math.pi / 26 + rng.uniform(-0.08, 0.08)
+    rx_, rz_ = lrx * rng.uniform(1.0, 1.08), lrz * rng.uniform(1.0, 1.1)
+    sx, sz = lcx + math.cos(a) * rx_, lcz + math.sin(a) * rz_
+    if abs(sx - px_) < pw / 2 + 0.3 and sz < lcz:       # not under the pier
+        continue
+    if sx < lcx - lrx + 1.6 and abs(sz - lcz) < 1.4:    # nor at the swimmers' west beach
+        continue
+    sr = rng.uniform(0.14, 0.26)
+    B['rock'].blob(P(sx, sz, sr * 0.3 - 0.12), (sr, sr * 0.9, sr * 0.6), rot=rng.uniform(0, 3), jitter=0.15, rng=rng)
+    if rng.random() < 0.5:   # a few reeds
+        for _ in range(4):
+            B['veg'].frustum(P(sx + rng.uniform(-0.3, 0.3), sz + rng.uniform(-0.3, 0.3) * (1 if sz > lcz else -1), -0.13),
+                             0.04, 0.0, rng.uniform(0.6, 1.1), sides=4, rot=rng.uniform(0, 1))
+for lx_, lz_ in ((24.6, 6.0), (25.2, 7.6), (24.0, 8.6), (23.4, 9.3), (19.0, 4.2), (17.6, 5.3)):  # lily pads
+    B['veg'].frustum(P(lx_, lz_, -0.11), 0.32, 0.3, 0.01, sides=9)
+    B['flower_pink'].blob(P(lx_ + 0.05, lz_, -0.08), (0.08, 0.08, 0.06))
+for dx, dz in ((1.6, 0.3), (2.3, 1.0), (0.8, 1.3)):  # ducks, on the east side
+    dx_, dz_ = lcx + dx + 1.0, lcz + dz
+    B['duck'].blob(P(dx_, dz_, -0.07), (0.2, 0.15, 0.13), rot=rng.uniform(0, 3))
+    B['duck'].blob(P(dx_, dz_ + 0.14, 0.05), (0.09, 0.09, 0.09))
+    B['beak'].box(P(dx_, dz_ + 0.25, 0.04), (0.05, 0.08, 0.03))
+
+# the pier: its deck top is at 0 (the floor height, where the avatars' feet are), piles go down into the water
+B['wood'].box(P(px_, (pz0 + pz1) / 2, -0.04), (pw, pz1 - pz0, 0.08))
+for zz in (pz0 + 0.4, (pz0 + pz1) / 2, pz1 - 0.2):
+    for sx_ in (-1, 1):
+        B['trunk'].box(P(px_ + sx_ * (pw / 2 - 0.06), zz, -0.5), (0.14, 0.14, 1.0))
+for sx_ in (-1, 1):   # a taller mooring post at each corner of the end
+    B['trunk'].box(P(px_ + sx_ * (pw / 2 - 0.06), pz1 - 0.12, 0.2), (0.14, 0.14, 0.45))
+B['wood'].box(P(px_ - 0.45, pz1 - 0.55, 0.1), (0.3, 0.3, 0.2))   # a bucket for the catch
 
 fx_, fz_ = FIRE
 for i in range(7):  # ring of stones
@@ -487,10 +526,12 @@ for (lx_, lz_), along in logs:
 # `hours` limits an activity to part of the day [from, to) and may wrap past midnight.
 
 
-def aff(verb, duration, effects, pose='stand', hours=None):
+def aff(verb, duration, effects, pose='stand', hours=None, orbit=None):
     a = {'verb': verb, 'duration': duration, 'effects': effects, 'pose': pose}
     if hours:
         a['hours'] = hours
+    if orbit:  # swim in a circle of this radius while doing it; the use point is on the circle, due east of its centre
+        a['orbit'] = orbit
     return a
 
 
@@ -516,8 +557,18 @@ for k, sx_ in enumerate((-0.4, 0.4), 1):
               [aff('relax', 45, {'fun': 20, 'energy': 8}, 'sit', DAY),
                aff('read', 60, {'knowledge': 22, 'fun': 8, 'energy': -2}, 'sit', DAY)],
               approach=(hx, BENCH2[1] + 0.225 + 0.5))
-place_obj('pond', 'duck pond', (POND[0], POND[1]), (POND[0] - 2.1, POND[1] - 1.9),
+# the lake: `watch_ducks` from the shore, fishing at the end of the pier, swimming from the shores
+place_obj('lake', 'lake', (lcx, lcz), (lcx - 1.4, lcz - lrz - 0.75),
           [aff('watch_ducks', 20, {'fun': 12, 'energy': 2}, 'stand', DAY)])
+for k, sx_ in enumerate((-0.45, 0.45), 1):
+    place_obj(f'fish_spot_{k}', 'fishing spot', (px_ + sx_, pz1 + 2.5), (px_ + sx_, pz1 - 0.6),
+              [aff('fish', 45, {'fun': 14, 'knowledge': 4, 'energy': -2}, 'stand', [6, 20])])
+SWIM = {'fun': 24, 'energy': -10}
+R_SWIM = 0.9
+place_obj('swim_1', 'swimming water', (lcx, lcz), (18.6 + R_SWIM, 6.8),
+          [aff('swim', 50, SWIM, 'swim', [9, 18], orbit=R_SWIM)], approach=(15.2, 6.8))
+place_obj('swim_2', 'swimming water', (lcx, lcz), (21.4 + R_SWIM, 9.0),
+          [aff('swim', 50, SWIM, 'swim', [9, 18], orbit=R_SWIM)], approach=(21.4 + R_SWIM, 11.0))
 place_obj('campfire', 'campfire', FIRE, (FIRE[0] - 1.1, FIRE[1]),
           [aff('warm_up', 30, {'fun': 14, 'energy': 5}, 'stand', [17, 24])])
 for k, (cx_, zc) in enumerate(cots, 1):
@@ -587,6 +638,8 @@ yard = {
     'yard': {'x0': -FX, 'x1': FX, 'z0': FZ0, 'z1': FZ1},  # the fenced yard
     'gate': {'x': FX, 'z': DOOR_Z, 'halfWidth': 1.0},      # the gap in its right-hand side
     'area': AREA,                                           # everything agents may walk in
+    'water': {'x': LAKE[0], 'z': LAKE[1], 'rx': LAKE[2], 'rz': LAKE[3]},   # the lake (an ellipse)
+    'pier': {'x': PIER[0], 'z0': PIER[1], 'z1': PIER[2], 'w': PIER[3]},    # a dry strip across it
     'door': {'x': 5.0, 'z': DOOR_Z, 'halfWidth': 0.25},
     'lights': LIGHTS,
     'obstacles': OBSTACLES,

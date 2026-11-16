@@ -38,6 +38,8 @@ export class Avatar {
     new THREE.BoxGeometry(0.24, 0.03, 0.32),
     new THREE.MeshStandardMaterial({ color: 0xe8d9a8 }),
   )
+  /** a fishing rod with its line and bobber, in front of the avatar while fishing */
+  private rod = new THREE.Group()
   private blinkT = 2
   private headTop = 1.7
   private label: CSS2DObject
@@ -57,6 +59,21 @@ export class Avatar {
     this.root.add(this.inner)
     this.book.visible = false
     this.root.add(this.book)
+    const rodDir = new THREE.Vector3(0, 0.5, Math.sqrt(0.75))
+    const wood = new THREE.MeshStandardMaterial({ color: 0x8a5a33 })
+    const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.022, 2.2, 6), wood)
+    stick.rotation.x = Math.PI / 3                       // along rodDir
+    stick.position.copy(rodDir).multiplyScalar(1.1)
+    const tip = rodDir.clone().multiplyScalar(2.2)
+    const lineLen = 1.0 + tip.y + 0.12                   // from the tip down to the water (about 0.12 m below the floor)
+    const line = new THREE.Mesh(new THREE.CylinderGeometry(0.003, 0.003, lineLen, 3), new THREE.MeshBasicMaterial({ color: 0xeeeeee }))
+    line.position.set(0, tip.y - lineLen / 2, tip.z)
+    const bobber = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), new THREE.MeshStandardMaterial({ color: 0xd9452f }))
+    bobber.position.set(0, tip.y - lineLen, tip.z)
+    this.rod.add(stick, line, bobber)
+    this.rod.position.set(0.18, 1.0, 0.3)
+    this.rod.visible = false
+    this.root.add(this.rod)
 
     // floating label: name tag always, speech / thought bubbles when active
     const wrap = document.createElement('div')
@@ -75,7 +92,7 @@ export class Avatar {
     this.nameEl.style.borderColor = '#' + color.toString(16).padStart(6, '0')
   }
 
-  private updateLabel(agent: Agent, sit: boolean, lie: boolean) {
+  private updateLabel(agent: Agent, sit: boolean, lie: boolean, swim: boolean) {
     const now = performance.now()
     const say = agent.speech && now < agent.speechUntil ? agent.speech : ''
     const think = !say && agent.thought && now < agent.thoughtUntil ? agent.thought : ''
@@ -90,7 +107,7 @@ export class Avatar {
       this.shown.think = think
     }
     // keep the label just above the head for the current pose
-    const y = lie ? (this.vrm ? 1.0 : 1.35) : sit ? this.headTop - (this.hipsY - 0.55) : this.headTop
+    const y = swim ? 0.7 : lie ? (this.vrm ? 1.0 : 1.35) : sit ? this.headTop - (this.hipsY - 0.55) : this.headTop
     this.label.position.y += (y - this.label.position.y) * 0.2
   }
 
@@ -159,7 +176,7 @@ export class Avatar {
     const st = agent.state
     const moving = st.k === 'moving'
     const verb = st.k === 'doing' ? st.aff.verb : ''
-    const sit = agent.pose === 'sit', lie = agent.pose === 'lie'
+    const sit = agent.pose === 'sit', lie = agent.pose === 'lie', swim = agent.pose === 'swim'
     const speaking = !!agent.speech && now < agent.speechUntil
 
     // smooth heading (shortest way round)
@@ -168,14 +185,15 @@ export class Avatar {
     this.yaw += dy * (1 - Math.exp(-dt * 10))
     this.root.position.set(agent.pos.x, 0, agent.pos.z)
     this.root.rotation.y = this.yaw
-    this.updateLabel(agent, sit, lie)
+    this.updateLabel(agent, sit, lie, swim)
+    this.rod.visible = verb === 'fish'
 
     if (!this.vrm) {
       // lying: tip the capsule onto its side and rest it on the mattress (top at ~0.5 m, radius 0.3),
       // otherwise its centre would sit at floor level, inside the bed
-      this.inner.rotation.x = lie ? Math.PI / 2 : 0
+      this.inner.rotation.x = lie || swim ? Math.PI / 2 : 0
       this.inner.position.y = lie ? 0.82 : 0
-      this.capsule.position.y = lie ? 0 : sit ? 0.55 : 0.75
+      this.capsule.position.y = lie || swim ? 0 : sit ? 0.55 : 0.75
       return
     }
 
@@ -187,7 +205,12 @@ export class Avatar {
     const P = (n: BoneName, x = 0, y = 0, z = 0, rate = k) => this.pose(n, rate, x, y, z)
 
     // ---- legs ----
-    if (sit) {
+    const sw = t * 3.4 // swimming stroke phase
+    if (swim) {
+      P('leftUpperLeg', Math.sin(sw * 2.4) * 0.35, 0, -0.03); P('rightUpperLeg', -Math.sin(sw * 2.4) * 0.35, 0, 0.03)
+      P('leftLowerLeg', Math.max(0, -Math.sin(sw * 2.4)) * 0.5); P('rightLowerLeg', Math.max(0, Math.sin(sw * 2.4)) * 0.5)
+      P('leftFoot', 0.3); P('rightFoot', 0.3)
+    } else if (sit) {
       P('leftUpperLeg', -Math.PI / 2, 0.1, -0.05); P('rightUpperLeg', -Math.PI / 2, -0.1, 0.05)
       P('leftLowerLeg', Math.PI / 2 - 0.1); P('rightLowerLeg', Math.PI / 2 - 0.1)
       P('leftFoot', 0.1); P('rightFoot', 0.1)
@@ -223,6 +246,14 @@ export class Avatar {
       P('leftLowerArm', 0, -1.7); P('rightLowerArm', 0, 1.7 - this.flip * 0.25)
       P('leftHand', 0, 0, 0); P('rightHand', 0, 0, this.flip * 0.3)
       headX = 0.3
+    } else if (swim) {
+      // front crawl: the arms reach forward over the head and pull back, one after the other
+      P('hips'); P('spine', 0, Math.sin(sw) * 0.12); P('chest', 0, Math.sin(sw) * 0.1); P('neck')
+      P('leftUpperArm', 1.9 + Math.sin(sw) * 1.1, 0, -1.0); P('rightUpperArm', 1.9 - Math.sin(sw) * 1.1, 0, 1.0)
+      P('leftLowerArm', 0, -0.25 - Math.max(0, Math.cos(sw)) * 0.7); P('rightLowerArm', 0, 0.25 + Math.max(0, -Math.cos(sw)) * 0.7)
+      P('leftHand'); P('rightHand')
+      headX = -0.9
+      headY = Math.sin(sw * 0.5) * 0.15
     } else if (lie) {
       P('hips'); P('spine', 0.02 * breath); P('chest', 0.03 * breath); P('neck')
       P('leftUpperArm', 0, 0, -1.4); P('rightUpperArm', 0, 0, 1.4)
@@ -267,7 +298,7 @@ export class Avatar {
 
     // ---- head: look at someone nearby, nod while talking ----
     let want = 0
-    if (!lie) {
+    if (!lie && !swim) {
       const other = agent.nearestOther(3.5)
       if (other) {
         let a = Math.atan2(other.pos.x - agent.pos.x, other.pos.z - agent.pos.z) - this.yaw
@@ -281,10 +312,11 @@ export class Avatar {
     P('neck', headX * 0.3, this.lookYaw * 0.3, 0, k)
 
     // ---- body placement (blended so sitting down / lying down is not a snap) ----
-    const tgtPitch = lie ? -Math.PI / 2 : 0
-    const tgtY = lie ? 0.62 : sit ? -(this.hipsY - 0.55) : 0
+    // swimming: face down (the opposite pitch), half sunk into the water, which is 0.12 m below the floor
+    const tgtPitch = lie ? -Math.PI / 2 : swim ? Math.PI / 2 : 0
+    const tgtY = lie ? 0.62 : swim ? -0.08 + Math.sin(t * 2) * 0.02 : sit ? -(this.hipsY - 0.55) : 0
     // lying pivots about the feet, so slide the body along its length to centre the hips on the bed
-    const tgtZ = lie ? this.hipsY * 0.95 : sit ? -0.12 : 0
+    const tgtZ = lie ? this.hipsY * 0.95 : swim ? -this.hipsY * 0.95 : sit ? -0.12 : 0
     const kp = 1 - Math.exp(-dt * 7)
     this.cur.pitch += (tgtPitch - this.cur.pitch) * kp
     this.cur.y += (tgtY - this.cur.y) * kp
