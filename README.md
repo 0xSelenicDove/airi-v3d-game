@@ -6,7 +6,7 @@ A small 3D world that is driven entirely by AI. Think "VRChat, but the inhabitan
 
 Built with TypeScript, [three.js](https://threejs.org/) and [@pixiv/three-vrm](https://github.com/pixiv/three-vrm). It runs in the browser; there is no backend.
 
-> Status: working prototype. The agents run on a built-in rule-based "mock brain" by default. You can plug in any OpenAI-compatible LLM (your own model, Ollama, LM Studio, vLLM, ...), but that path has only been tested against a fake server so far.
+> Status: working prototype. The agents run on a built-in rule-based "mock brain" by default. You can plug in any OpenAI-compatible LLM (your own model, Ollama, LM Studio, vLLM, ...), and it has been tried with one hosted model (Gemini 2.5 Flash via 302.ai, see below).
 
 ## Features
 
@@ -71,12 +71,15 @@ Add `?reset` to the URL (`http://localhost:5173/?reset`) to wipe saved memories 
 
 3. Restart `npm run dev` (Vite only reads env files at startup).
 
+Optional: `VITE_LLM_SYSTEM_ROLE=1` sends the instructions as a real `system` message. By default they go inside the user message, because some hosted models (including the Gemini model below) follow the exact JSON format far more reliably that way.
+
 The HUD shows `brain: LLM` when it is active. If a call fails or returns something unusable, the agent falls back to the mock brain and the HUD shows a warning.
 
 Notes:
 
 - The model is asked for one JSON action per turn, plus a short `thought`:
   `{"thought":"...","type":"interact","object":"desk","verb":"use_computer"}`. Other actions are `say` and `wait`.
+- The prompt lists every legal action, and near-miss replies (e.g. `{"command":"sleep bed2"}`) are recovered when the intent is clear. The HUD brain stats are available in the console as `dbg.brain.stats` (`strict` / `coerced` / `failed`).
 - If the model picks something that does not exist, the error is returned to it on its next turn.
 - Everything is called directly from the browser. If your server blocks cross-origin requests, allow `http://localhost:5173` (for Ollama, set `OLLAMA_ORIGINS`).
 - Anything in a `VITE_` variable is visible in the browser, so do not put a production API key there.
@@ -113,7 +116,7 @@ Each agent runs two loops. A **slow loop** asks the brain for the next action on
 - Relevance in memory recall is keyword overlap, not embeddings.
 - Animation is procedural, so it is stiffer than real motion clips (`.vrma` clip support would be a natural next step).
 - Agents separate with a simple push; head-on meetings in tight spaces can look awkward.
-- The LLM brain has not been tried against a real model yet.
+- The LLM brain has only been tried with Gemini 2.5 Flash (no thinking) through 302.ai: about 2-3 s per decision, 10 of 11 replies exactly in format and 1 recovered, in a ~100 s run. Other models may need prompt tweaks. Agents also tend to chat repetitively.
 - No automated tests.
 
 ## Inspiration

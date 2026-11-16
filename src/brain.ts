@@ -43,6 +43,11 @@ export interface LLMOptions {
   url: string
   model: string
   apiKey?: string
+  /**
+   * Send the instructions as a real `system` message. Off by default: some hosted models (e.g. Gemini via
+   * gateways) follow instructions much more reliably when they sit in the user turn.
+   */
+  systemRole?: boolean
   timeoutMs?: number
 }
 
@@ -52,6 +57,8 @@ const pick = <T>(a: T[]) => a[Math.floor(Math.random() * a.length)]
 export class LLMBrain implements Brain {
   /** last problem, shown in the HUD; empty when healthy */
   status = ''
+  /** how model replies were handled, for evaluation */
+  stats = { calls: 0, strict: 0, coerced: 0, failed: 0, totalMs: 0 }
   private fallback = new MockBrain()
 
   constructor(private o: LLMOptions) {}
@@ -85,21 +92,36 @@ export class LLMBrain implements Brain {
   }
 
   private async ask(p: Persona, obs: Observation): Promise<Action> {
-    const verbs = obs.objects.map(o => `${o.id} (${o.kind}): ${o.verbs.join(', ')}`).join('\n')
+    // spell out every legal action so the model copies one instead of inventing a format
+    const legal = obs.objects
+      .filter(o => !o.inUseBy)
+      .flatMap(o => o.verbs.map(v => `{"type":"interact","object":"${o.id}","verb":"${v}"}`))
     const system =
       `You are ${p.name}, an AI living in a small room in a 3D world. ${p.description}\n` +
       `You live a natural daily life: sleep at night, and spend your day on things you enjoy. Needs (0-100, low = urgent): energy, fun, knowledge.\n` +
-      `Your bed is "${obs.yourBed}". Beds and chairs fit one person at a time; objects marked inUseBy are taken.\n` +
-      `You share the room with others (see "others"); you may talk to them with a say action, and "heard" shows what they said to you. Be natural, not repetitive.\n` +
-      `Things you can interact with:\n${verbs}\n\n` +
-      `Choose ONE next action. Reply with a single JSON object and nothing else:\n` +
-      `{"thought":"<one short sentence>","type":"interact","object":"<id>","verb":"<verb>"}\n` +
-      `{"thought":"...","type":"say","text":"..."}\n` +
-      `{"thought":"...","type":"wait","minutes":10}\n` +
-      `"memories" are things you recall that relate to the moment; "insights" are your own conclusions about your life. Let them shape your choices and what you say. ` +
-      `Use only the objects and verbs listed. If lastResult reports an error, fix it.`
+      `Your bed is "${obs.yourBed}". Objects marked inUseBy are taken by someone else.\n` +
+      `You share the room with others (see "others"); "heard" shows what they said to you. Be natural, not repetitive.\n` +
+      `"memories" are things you recall that relate to the moment; "insights" are your own conclusions about your life. Let them shape your choices and what you say.\n\n` +
+      `Choose ONE next action. Your reply MUST be exactly one JSON object with a "thought" key (one short sentence) plus ONE of these action shapes, copied exactly:\n` +
+      legal.map(l => `- ${l.slice(0, -1)},"thought":"..."}`).join('\n') + '\n' +
+      `- {"type":"say","text":"<what you say aloud>","thought":"..."}\n` +
+      `- {"type":"wait","minutes":10,"thought":"..."}\n` +
+      `Use only the "type" values interact, say, wait. Do not add any other keys, plans or commands. Output the JSON object only. If lastResult reports an error, pick a different action.`
 
-    return parseAction(await this.chat(system, JSON.stringify(obs)))
+    this.stats.calls++
+    const t0 = performance.now()
+    const reply = await this.chat(system, JSON.stringify(obs))
+    this.stats.totalMs += performance.now() - t0
+    try {
+      const a = parseAction(reply)
+      this.stats.strict++
+      return a
+    } catch {
+      const c = coerceAction(reply, obs)
+      if (c) { this.stats.coerced++; return c }
+      this.stats.failed++
+      throw new Error(`unusable reply: ${reply.replace(/\s+/g, ' ').slice(0, 100)}`)
+    }
   }
 
   private async chat(system: string, user: string): Promise<string> {
@@ -116,7 +138,9 @@ export class LLMBrain implements Brain {
         body: JSON.stringify({
           model: this.o.model,
           temperature: 0.8,
-          messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+          messages: this.o.systemRole
+            ? [{ role: 'system', content: system }, { role: 'user', content: user }]
+            : [{ role: 'user', content: `${system}\n\nCurrent situation:\n${user}\n\nYour reply:` }],
         }),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status} ${(await res.text()).slice(0, 120)}`)
@@ -143,4 +167,40 @@ export function parseAction(text: string): Action {
   if (a.type === 'say' && typeof a.text === 'string') return a
   if (a.type === 'wait') return { ...a, minutes: Number(a.minutes) || 10 }
   throw new Error(`bad action: ${JSON.stringify(a).slice(0, 100)}`)
+}
+
+/**
+ * Second line of defence for replies that are JSON-ish but not in our schema, e.g.
+ * {"action":"sleep(bed=bed2)"} or {"command":"sleep bed2"}: recover the intent by finding a
+ * legal (object, verb) pair mentioned in the reply. Returns null if nothing legal is found.
+ */
+export function coerceAction(text: string, obs: Observation): Action | null {
+  const has = (w: string) => new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(text) // whole word only
+  const free = obs.objects.filter(o => !o.inUseBy)
+  const thought = /"(?:thought|plan|reason)"\s*:\s*"([^"]{1,200})"/i.exec(text)?.[1]
+  const withThought = (a: Action): Action => (thought ? { ...a, thought } : a)
+
+  // 1) an object id and one of its verbs both appear
+  const both = free.flatMap(o => o.verbs.map(v => ({ o, v }))).filter(({ o, v }) => has(o.id) && has(v))
+  if (both.length) {
+    const pick = both.find(x => x.o.id === obs.yourBed) ?? both[0]
+    // "sleep in a bed" means *her* bed, not whichever bed the model happened to name
+    const mine = free.find(o => o.id === obs.yourBed)
+    if (mine && mine.kind === pick.o.kind && mine.verbs.includes(pick.v)) return withThought({ type: 'interact', object: mine.id, verb: pick.v })
+    return withThought({ type: 'interact', object: pick.o.id, verb: pick.v })
+  }
+  // 1b) only an object appears and it has a single verb (e.g. "target": "desk")
+  const named = free.filter(o => o.verbs.length === 1 && has(o.id))
+  if (named.length === 1) return withThought({ type: 'interact', object: named[0].id, verb: named[0].verbs[0] })
+  // 2) only a verb appears and it is unambiguous (e.g. "sleep" -> your bed)
+  const byVerb = free.flatMap(o => o.verbs.map(v => ({ o, v }))).filter(({ v }) => has(v))
+  const uniq = [...new Set(byVerb.map(x => x.v))]
+  if (uniq.length === 1) {
+    const pick = byVerb.find(x => x.o.id === obs.yourBed) ?? byVerb[0]
+    return withThought({ type: 'interact', object: pick.o.id, verb: pick.v })
+  }
+  // 3) plain speech
+  const say = /"text"\s*:\s*"([^"]{1,300})"/i.exec(text)?.[1]
+  if (say && !/"target"|"object"/i.test(text)) return withThought({ type: 'say', text: say })
+  return null
 }

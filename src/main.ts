@@ -12,7 +12,7 @@ const world = new World()
 // Configure via .env (see .env.example). Without VITE_LLM_URL the mock brain is used.
 const env = import.meta.env
 const brain = env.VITE_LLM_URL
-  ? new LLMBrain({ url: env.VITE_LLM_URL, model: env.VITE_LLM_MODEL ?? 'default', apiKey: env.VITE_LLM_KEY })
+  ? new LLMBrain({ url: env.VITE_LLM_URL, model: env.VITE_LLM_MODEL ?? 'default', apiKey: env.VITE_LLM_KEY, systemRole: env.VITE_LLM_SYSTEM_ROLE === '1' })
   : new MockBrain()
 
 const personas: Persona[] = [
@@ -132,7 +132,7 @@ addEventListener('drop', e => {
   if (f && f.name.toLowerCase().endsWith('.vrm')) avatars[i].loadFile(f).catch(err => console.warn(err))
 })
 
-;(window as any).dbg = { world, agents, avatars, camera, controls } // handy for console poking
+;(window as any).dbg = { world, agents, avatars, camera, controls, brain } // handy for console poking
 
 // ---- navigation debug overlay (press G) ----
 const debug = new THREE.Group()
