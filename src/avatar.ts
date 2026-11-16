@@ -80,7 +80,7 @@ export class Avatar {
       this.shown.think = think
     }
     // keep the label just above the head for the current pose
-    const y = lie ? 1.0 : sit ? this.headTop - (this.hipsY - 0.55) : this.headTop
+    const y = lie ? (this.vrm ? 1.0 : 1.35) : sit ? this.headTop - (this.hipsY - 0.55) : this.headTop
     this.label.position.y += (y - this.label.position.y) * 0.2
   }
 
@@ -149,8 +149,11 @@ export class Avatar {
     this.updateLabel(agent, sit, lie)
 
     if (!this.vrm) {
+      // lying: tip the capsule onto its side and rest it on the mattress (top at ~0.5 m, radius 0.3),
+      // otherwise its centre would sit at floor level, inside the bed
       this.inner.rotation.x = lie ? Math.PI / 2 : 0
-      this.capsule.position.y = lie ? 0.65 : sit ? 0.55 : 0.75
+      this.inner.position.y = lie ? 0.82 : 0
+      this.capsule.position.y = lie ? 0 : sit ? 0.55 : 0.75
       return
     }
 
