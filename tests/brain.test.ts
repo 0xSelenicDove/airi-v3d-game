@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { coerceAction, parseAction } from '../src/brain'
+import { describe, expect, it, vi } from 'vitest'
+import { MockBrain, coerceAction, parseAction } from '../src/brain'
 import type { Observation } from '../src/types'
 
 const obs = {
@@ -49,5 +49,25 @@ describe('coerceAction', () => {
   })
   it('falls back to plain speech and keeps the thought', () => {
     expect(coerceAction('{"text":"Good morning!","thought":"be nice"}', obs)).toEqual({ type: 'say', text: 'Good morning!', thought: 'be nice' })
+  })
+})
+
+describe('MockBrain camping', () => {
+  const persona = { name: 'Airi', description: '', color: 0, sleepWindow: [0, 8] as [number, number], bed: 'bed2' }
+  const night = {
+    hour: 3, needs: { energy: 30, fun: 50, knowledge: 50 }, yourBed: 'bed2', heard: [], others: [],
+    objects: [
+      { id: 'bed2', kind: 'bed', verbs: ['sleep'] },
+      { id: 'tent_cot_1', kind: 'camp cot', verbs: ['sleep_in_tent', 'rest_in_tent'], outside: true },
+    ],
+  } as unknown as Observation
+
+  it('sometimes sleeps in the tent, otherwise in its own bed', async () => {
+    const roll = (v: number) => {
+      const spy = vi.spyOn(Math, 'random').mockReturnValue(v)
+      return new MockBrain().decide(persona, night).finally(() => spy.mockRestore())
+    }
+    expect(await roll(0.99)).toMatchObject({ object: 'bed2', verb: 'sleep' })
+    expect(await roll(0.2)).toMatchObject({ object: 'tent_cot_1', verb: 'sleep_in_tent' })
   })
 })

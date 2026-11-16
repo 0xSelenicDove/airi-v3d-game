@@ -4,7 +4,7 @@ import type { Action, Brain, NeedName, Observation, Persona } from './types'
 const VERB_NEED: Record<string, NeedName> = {
   use_computer: 'fun', relax: 'fun', read: 'knowledge', eat: 'energy', grab_snack: 'energy', cook: 'energy',
   tend_garden: 'fun', check_mail: 'fun', admire_flowers: 'fun', enjoy_fresh_air: 'fun', stargaze: 'fun',
-  watch_ducks: 'fun', warm_up: 'fun',
+  watch_ducks: 'fun', warm_up: 'fun', sit_by_fire: 'fun', sleep_in_tent: 'energy', rest_in_tent: 'energy',
 }
 /** a little nudge to go out when the weather is the same all day: being outside is a nice change */
 const OUTSIDE_BONUS = 12
@@ -38,11 +38,16 @@ export class MockBrain implements Brain {
     // be sociable now and then, and answer if spoken to
     if (obs.heard.length && Math.random() < 0.6) return { type: 'say', text: pick(['Oh, hi!', 'Yeah, same here.', 'How is your day going?']), thought: `${obs.others[0]?.name ?? 'Someone'} spoke to me` }
     if (obs.others.length && Math.random() < 0.12) return { type: 'say', text: pick(['Hello!', 'What are you up to?', 'Nice room, huh?']) }
-    if (n.energy < 20 || (inSleepWindow && n.energy < 80)) return { type: 'interact', object: obs.yourBed, verb: 'sleep' }
+    if (n.energy < 20 || (inSleepWindow && n.energy < 80)) {
+      // now and then, camp out in the tent instead of the own bed
+      const cot = obs.objects.find(o => !o.inUseBy && o.verbs.includes('sleep_in_tent'))
+      if (cot && Math.random() < 0.3) return { type: 'interact', object: cot.id, verb: 'sleep_in_tent', thought: 'It is a nice night, I will sleep in the tent.' }
+      return { type: 'interact', object: obs.yourBed, verb: 'sleep' }
+    }
     // every free activity in the room, scored by how much the agent needs what it gives
     const scores: [number, Action][] = obs.objects
       .filter(o => !o.inUseBy)
-      .flatMap(o => o.verbs.filter(v => v !== 'sleep').map((v): [number, Action] => {
+      .flatMap(o => o.verbs.filter(v => v !== 'sleep' && v !== 'sleep_in_tent').map((v): [number, Action] => {
         const need = VERB_NEED[v]
         const score = (need ? 100 - n[need] : CHORE_SCORE) + (o.outside ? OUTSIDE_BONUS : 0)
         return [score, { type: 'interact', object: o.id, verb: v }]
@@ -112,7 +117,7 @@ export class LLMBrain implements Brain {
       .filter(o => !o.inUseBy)
       .flatMap(o => o.verbs.map(v => `{"type":"interact","object":"${o.id}","verb":"${v}"}`))
     const system =
-      `You are ${p.name}, an AI living in a small house with a fenced yard, and a meadow with a pond and a campfire beyond the gate, in a 3D world. ${p.description}\n` +
+      `You are ${p.name}, an AI living in a small house with a fenced yard, and a meadow with a pond a campfire and a tent with two cots beyond the gate, in a 3D world. ${p.description}\n` +
       `You live a natural daily life: sleep at night, and spend your day on things you enjoy. Needs (0-100, low = urgent): energy, fun, knowledge.\n` +
       `Your bed is "${obs.yourBed}". Objects marked inUseBy are taken by someone else. Objects marked "outside":true are outside the house: ` +
       `you walk out through the door (and the gate, for the meadow) to use them, so they are a nice change in good daylight. Some activities are only offered at certain hours.\n` +

@@ -79,6 +79,14 @@ PALETTE = {
     'ember':       0xd9552b,
     'duck':        0xfaf7ef,
     'beak':        0xf2b134,
+    'canvas':      0xecdcb4,
+    'canvas_south': 0xecdcb4,  # the side that faces the default camera; the game draws it see-through
+    'canvas_acc':  0xc9694c,
+    'tent_floor':  0x9b8b6a,
+    'lantern':     0xffd27a,
+    'blanket_a':   0x4f8f98,
+    'blanket_b':   0xe08a78,
+    'pillow':      0xf4efe6,
 }
 
 materials = {}
@@ -186,6 +194,7 @@ MEADOW = (23.3, 1.3, 8.0)       # centre x, z and radius of the grassy clearing
 POND = (23.0, 3.4, 2.0)         # centre x, z and radius
 BENCH2 = (23.0, -0.7)           # faces the pond (+z)
 FIRE = (27.6, -1.2)
+TENT = (28.2, 4.3)             # ridge along x, open at the west end, closed at the east end
 # z0 puts a navigation cell centre exactly on the door line (z = 3), the doorway is only two cells wide
 AREA = {'x0': -FX, 'x1': 31.0, 'z0': -11.5, 'z1': 12.5}
 
@@ -214,6 +223,28 @@ def patch(batch, cx, cz, rx, rz, h, n=36, wobble=0.04):
         a = i * 2 * math.pi / n
         pts.append(P(cx + math.cos(a) * rx * (1 + wobble * math.sin(a * 5)), cz + math.sin(a) * rz * (1 + wobble * math.cos(a * 3)), h))
     batch.poly(list(reversed(pts)))
+
+
+def slab(batch, corners, t):
+    """a thin panel through four corners (Blender points), t thick, for canvas"""
+    a, b, c, d = corners
+    n = (b - a).cross(d - a).normalized() * (t / 2)
+    lo = [q - n for q in corners]
+    hi = [q + n for q in corners]
+    for q in ((lo[0], lo[1], lo[2], lo[3]), (hi[3], hi[2], hi[1], hi[0]), (lo[0], hi[0], hi[1], lo[1]),
+              (lo[1], hi[1], hi[2], lo[2]), (lo[2], hi[2], hi[3], lo[3]), (lo[3], hi[3], hi[0], lo[0])):
+        batch.poly(list(q))
+
+
+def prism(batch, tri, dx):
+    """a triangle (three Blender points in a plane of constant x) extruded dx along x"""
+    a = [Vector(q) for q in tri]
+    b = [q + Vector((dx, 0, 0)) for q in a]
+    batch.poly(a)
+    batch.poly(list(reversed(b)))
+    for i in range(3):
+        j = (i + 1) % 3
+        batch.poly([a[i], a[j], b[j], b[i]])
 
 
 # ---- ground ----
@@ -414,6 +445,44 @@ B['ember'].frustum(P(fx_, fz_, 0.12), 0.32, 0.12, 0.28, sides=7)
 B['flame'].frustum(P(fx_, fz_, 0.22), 0.22, 0.0, 0.55, sides=6, rot=0.4)
 obstacle(fx_, fz_, 1.3, 1.3)
 
+# ---- the camp: a tent with two cots, log seats round the fire, a lantern ----
+tx, tz = TENT
+TL, TW, TH, TG = 1.5, 2.0, 2.2, -0.12     # half length, half width, ridge height, ground level
+B['tent_floor'].box(P(tx, tz, TG + 0.01), (2 * TL, 2 * TW, 0.03))
+for sz_ in (-1, 1):
+    slab(B['canvas_south' if sz_ == 1 else 'canvas'], [P(tx - TL, tz + sz_ * TW, TG), P(tx + TL, tz + sz_ * TW, TG),
+                       P(tx + TL, tz, TH), P(tx - TL, tz, TH)], 0.03)
+prism(B['canvas_acc'], [P(tx + TL, tz - TW, TG), P(tx + TL, tz + TW, TG), P(tx + TL, tz, TH)], 0.03)
+B['wood'].box(P(tx, tz, TH + 0.02), (2 * TL + 0.4, 0.07, 0.07))   # ridge pole, sticking out at both ends
+obstacle(tx, tz, 2 * TL + 0.2, 2 * TW + 0.2)
+
+# cots: the top is 0.5 m above the floor, like the beds (the lying pose in src/avatar.ts expects it)
+cots = []
+for k, zc in enumerate((tz - 0.8, tz + 0.8), 1):
+    cx_ = tx + 0.1
+    for lx in (-0.9, 0.9):
+        for lz in (-0.32, 0.32):
+            B['wood'].box(P(cx_ + lx, zc + lz, 0.19), (0.07, 0.07, 0.62))
+    B['wood'].box(P(cx_, zc, 0.475), (2.0, 0.8, 0.05))
+    B['blanket_a' if k == 1 else 'blanket_b'].box(P(cx_ + 0.2, zc, 0.52), (1.3, 0.76, 0.05))
+    B['pillow'].box(P(cx_ - 0.75, zc, 0.55), (0.4, 0.5, 0.1))  # the sleeper's head is at the west end, as in the beds
+    cots.append((cx_, zc))
+# a lantern hanging from the ridge pole
+B['wood'].box(P(tx, tz, 1.95), (0.02, 0.02, 0.5))
+B['lantern'].box(P(tx, tz, 1.62), (0.16, 0.16, 0.22))
+LIGHTS = [
+    {'id': 'campfire', 'x': FIRE[0], 'y': 0.7, 'z': FIRE[1], 'color': 0xff8a3c, 'intensity': 7, 'distance': 9, 'flicker': True},
+    {'id': 'tent_lantern', 'x': tx, 'y': 1.6, 'z': tz, 'color': 0xffc27a, 'intensity': 3.5, 'distance': 5, 'flicker': False},
+]
+
+# log seats round the fire: tops 0.46 m (the sitting height in src/avatar.ts)
+LOG_W = 0.4
+logs = [((FIRE[0] - 1.9, FIRE[1]), 'z'), ((FIRE[0], FIRE[1] + 1.9), 'x')]
+for (lx_, lz_), along in logs:
+    size = (LOG_W, 1.3, 0.62) if along == 'z' else (1.3, LOG_W, 0.62)
+    B['trunk'].box(P(lx_, lz_, 0.15), size)
+    obstacle(lx_, lz_, size[0], size[1])
+
 # ---- what agents can do outside (game coordinates; see room-layout.json for the indoor ones) ----
 # `hours` limits an activity to part of the day [from, to) and may wrap past midnight.
 
@@ -451,6 +520,22 @@ place_obj('pond', 'duck pond', (POND[0], POND[1]), (POND[0] - 2.1, POND[1] - 1.9
           [aff('watch_ducks', 20, {'fun': 12, 'energy': 2}, 'stand', DAY)])
 place_obj('campfire', 'campfire', FIRE, (FIRE[0] - 1.1, FIRE[1]),
           [aff('warm_up', 30, {'fun': 14, 'energy': 5}, 'stand', [17, 24])])
+for k, (cx_, zc) in enumerate(cots, 1):
+    # like the beds: the use point is on the cot, and the way in is a straight line from the open end of the tent
+    place_obj(f'tent_cot_{k}', 'camp cot', (cx_, zc), (cx_, zc),
+              [aff('sleep_in_tent', 360, {'energy': 90}, 'lie', [20, 8]),
+               aff('rest_in_tent', 60, {'energy': 25}, 'lie', DAY)],
+              approach=(tx - TL - 0.7, zc))
+for k, ((lx_, lz_), along) in enumerate(logs):
+    for j, off in enumerate((-0.35, 0.35), 1):
+        if along == 'z':   # faces +x, towards the fire
+            hips = (lx_, lz_ + off)
+            use, pos, appr = (hips[0] + 0.12, hips[1]), FIRE, (lx_ + LOG_W / 2 + 0.5, hips[1])
+        else:              # faces -z, towards the fire
+            hips = (lx_ + off, lz_)
+            use, pos, appr = (hips[0], hips[1] - 0.12), FIRE, (hips[0], lz_ - LOG_W / 2 - 0.5)
+        place_obj(f'log_seat_{2 * k + j}', 'log seat', pos, use,
+                  [aff('sit_by_fire', 40, {'fun': 16, 'energy': 8}, 'sit', [17, 24])], approach=appr)
 place_obj('garden', 'vegetable garden', (vx, vz), (vx, vz + 0.9 + 0.4),
           [aff('tend_garden', 40, {'fun': 12, 'knowledge': 6, 'energy': -6}, 'stand', DAY)])
 place_obj('mailbox', 'mailbox', (mx, mz), (mx - 0.7, mz),
@@ -503,6 +588,7 @@ yard = {
     'gate': {'x': FX, 'z': DOOR_Z, 'halfWidth': 1.0},      # the gap in its right-hand side
     'area': AREA,                                           # everything agents may walk in
     'door': {'x': 5.0, 'z': DOOR_Z, 'halfWidth': 0.25},
+    'lights': LIGHTS,
     'obstacles': OBSTACLES,
     'objects': OBJECTS,
 }

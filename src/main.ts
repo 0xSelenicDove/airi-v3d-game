@@ -102,10 +102,13 @@ const GHOST = 0.08 // opacity of a wall that is in the way
 const walls: { meshes: THREE.Mesh[]; hide: () => boolean; fade: number }[] = []
 const lampLights: THREE.PointLight[] = []
 let doorLeaf: THREE.Object3D | undefined
-// the campfire in the meadow: a warm flickering light after dark
-const fireObj = world.find('campfire')
-const fireLight = new THREE.PointLight(0xff8a3c, 0, 9, 2)
-if (fireObj) { fireLight.position.set(fireObj.pos.x, 0.7, fireObj.pos.z); scene.add(fireLight) }
+// outdoor lights from the yard layout (the campfire, the tent lantern): off by day, on after dark
+const outdoorLights = world.lights.map(l => {
+  const light = new THREE.PointLight(l.color, 0, l.distance, 2)
+  light.position.set(l.x, l.y, l.z)
+  scene.add(light)
+  return { light, base: l.intensity, flicker: l.flicker }
+})
 let doorAngle = 0
 let doorOpen = 0 // 0 closed .. 1 open
 new GLTFLoader().load(`${import.meta.env.BASE_URL}models/room.glb`, gltf => {
@@ -154,6 +157,12 @@ new GLTFLoader().load(`${import.meta.env.BASE_URL}models/room.glb`, gltf => {
 // (the shadow camera only covers the room), and fog in the sky colour fades the far hills into the horizon.
 scene.fog = new THREE.Fog(0xffffff, 30, 85)
 new GLTFLoader().load(`${import.meta.env.BASE_URL}models/outdoor.glb`, gltf => {
+  // the tent's south side faces the default camera: see-through, so the sleepers can be seen
+  gltf.scene.traverse(o => {
+    if (o instanceof THREE.Mesh && !Array.isArray(o.material) && o.material.name === 'out_canvas_south') {
+      Object.assign(o.material, { transparent: true, opacity: 0.3, depthWrite: false })
+    }
+  })
   scene.add(gltf.scene)
 }, undefined, e => console.warn('outdoor load failed', e))
 
@@ -254,7 +263,10 @@ function frame(now: number) {
   sun.intensity = 0.2 + daylight * 1.1
   hemi.intensity = 0.25 + daylight * 0.4
   for (const l of lampLights) l.intensity = (1 - daylight) * 4
-  fireLight.intensity = (1 - daylight) * (7 + Math.sin(now * 0.017) * 1.2 + Math.sin(now * 0.041) * 0.8)
+  for (const l of outdoorLights) {
+    const flick = l.flicker ? Math.sin(now * 0.017) * 0.17 + Math.sin(now * 0.041) * 0.11 : 0
+    l.light.intensity = (1 - daylight) * l.base * (1 + flick)
+  }
   if (doorLeaf) {
     const near = agents.some(a => dist(a.pos, world.door) < 1.3)
     doorOpen += ((near ? 1 : 0) - doorOpen) * (1 - Math.exp(-dt * 7))

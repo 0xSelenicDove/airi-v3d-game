@@ -21,6 +21,8 @@ export class World {
   readonly gate = yardLayout.gate
   /** everything agents may walk in: the yard and a strip of meadow east of the fence */
   readonly area = yardLayout.area
+  /** glowing things outdoors (campfire, tent lantern): the game lights them after dark */
+  readonly lights = yardLayout.lights
   /** the doorway in the right-hand wall, the only way between house and yard */
   readonly door = yardLayout.door
   /** floor areas of all furniture, trees, bushes and so on that block walking */
