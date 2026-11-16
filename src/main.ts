@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js'
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { World } from './world'
 import { Agent } from './agent'
 import { MockBrain, LLMBrain } from './brain'
@@ -75,34 +76,36 @@ const hemi = new THREE.HemisphereLight(0xffffff, 0x445566, 0.6)
 const sun = new THREE.DirectionalLight(0xffffff, 1.2)
 sun.position.set(5, 10, 6)
 sun.castShadow = true
+// cover the whole room, and offset along normals so flat furniture tops do not show shadow acne
+sun.shadow.mapSize.set(1024, 1024)
+Object.assign(sun.shadow.camera, { left: -7, right: 7, top: 7, bottom: -7 })
+sun.shadow.normalBias = 0.02
+sun.shadow.bias = -0.0005
+sun.shadow.camera.updateProjectionMatrix()
 scene.add(hemi, sun)
 
-const mat = (c: number) => new THREE.MeshStandardMaterial({ color: c })
-function box(w: number, h: number, d: number, color: number, x: number, y: number, z: number) {
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(color))
-  m.position.set(x, y, z)
-  m.castShadow = m.receiveShadow = true
-  scene.add(m)
-  return m
-}
-
-const { w, d } = world.bounds
-const floor = new THREE.Mesh(new THREE.PlaneGeometry(w, d), mat(0xc9b79c))
-floor.rotation.x = -Math.PI / 2
-floor.receiveShadow = true
-scene.add(floor)
-box(w, 3, 0.2, 0xe8e4dc, 0, 1.5, -d / 2)       // back wall
-box(0.2, 3, d, 0xdcd8d0, -w / 2, 1.5, 0)       // left wall
-
-// furniture (matches World objects)
-box(2.2, 0.5, 1.4, 0x6a7fd1, -3.5, 0.25, -2.5) // bed
-box(0.9, 0.2, 1.4, 0xffffff, -4.3, 0.55, -2.5) // pillow
-box(2.2, 0.5, 1.4, 0xd16a8f, -3.5, 0.25, 0.4)   // bed2
-box(0.9, 0.2, 1.4, 0xffffff, -4.3, 0.55, 0.4)   // pillow2
-box(2.4, 0.1, 1.2, 0x8a6a4a, 3.5, 0.75, -3.4)  // desk top
-box(0.6, 0.45, 0.05, 0x111111, 3.5, 1.05, -3.6) // monitor
-box(0.6, 2.0, 2.6, 0x7a5636, 4.7, 1.0, 0.5)    // bookshelf
-box(0.5, 0.5, 0.5, 0x555555, 3.5, 0.25, -2.2)   // chair
+// room: built by tools/blender/build_room.py from the Kenney Furniture Kit. World reads the same layout.
+// Walls between the camera and the room are hidden every frame, so the camera can orbit freely.
+const walls: { mesh: THREE.Object3D; hide: () => boolean }[] = []
+new GLTFLoader().load('/models/room.glb', gltf => {
+  gltf.scene.traverse(o => {
+    if (o instanceof THREE.Mesh) o.castShadow = o.receiveShadow = true
+    // the interaction point empties are data for the build checks, not for rendering
+    if (o.name.startsWith('IP_')) o.visible = false
+  })
+  const { w, d } = world.bounds
+  const side: Record<string, () => boolean> = {
+    Walls_Front: () => camera.position.z > d / 2,
+    Walls_Back: () => camera.position.z < -d / 2,
+    Walls_Left: () => camera.position.x < -w / 2,
+    Walls_Right: () => camera.position.x > w / 2,
+  }
+  for (const [name, hide] of Object.entries(side)) {
+    const mesh = gltf.scene.getObjectByName(name)
+    if (mesh) walls.push({ mesh, hide })
+  }
+  scene.add(gltf.scene)
+}, undefined, e => console.warn('room load failed', e))
 
 // avatars: capsule until a VRM loads
 const avatars = agents.map(a => {
@@ -224,6 +227,7 @@ function frame(now: number) {
     camera.position.add(delta)
   }
   controls.update()
+  for (const wall of walls) wall.mesh.visible = !wall.hide()
   renderer.render(scene, camera)
   labelRenderer.render(scene, camera)
 }
