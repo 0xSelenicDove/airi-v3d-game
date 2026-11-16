@@ -246,7 +246,8 @@ export class Avatar {
     // ---- body placement (blended so sitting down / lying down is not a snap) ----
     const tgtPitch = lie ? -Math.PI / 2 : 0
     const tgtY = lie ? 0.62 : sit ? -(this.hipsY - 0.55) : 0
-    const tgtZ = sit ? -0.12 : 0
+    // lying pivots about the feet, so slide the body along its length to centre the hips on the bed
+    const tgtZ = lie ? this.hipsY * 0.95 : sit ? -0.12 : 0
     const kp = 1 - Math.exp(-dt * 7)
     this.cur.pitch += (tgtPitch - this.cur.pitch) * kp
     this.cur.y += (tgtY - this.cur.y) * kp
