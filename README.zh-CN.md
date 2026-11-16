@@ -2,6 +2,8 @@
 
 [English](README.md) | **简体中文**
 
+**[在线演示](https://0xselenicdove.github.io/airi-v3d-game/)**（使用模拟大脑和胶囊体形象；想要完整体验，请在本地加入自己的 `.vrm` 模型和大模型）
+
 一个完全由 AI 驱动的小型 3D 世界。可以把它理解成「VRChat，但里面的居民是 AI」：每个 AI 都有自己的 VRM 形象，住在同一个房间里，有自己的生活规律（睡觉、读书、用电脑），会记住发生过的事，也会和其他 AI 聊天。
 
 使用 TypeScript、[three.js](https://threejs.org/) 和 [@pixiv/three-vrm](https://github.com/pixiv/three-vrm) 构建，直接在浏览器里运行，没有后端。

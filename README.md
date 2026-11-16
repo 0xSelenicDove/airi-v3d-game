@@ -2,6 +2,8 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
+**[Live demo](https://0xselenicdove.github.io/airi-v3d-game/)** (runs with the mock brain and capsule avatars; add your own `.vrm` models and LLM locally for the full experience)
+
 A small 3D world that is driven entirely by AI. Think "VRChat, but the inhabitants are AIs": each AI has a VRM avatar, lives in a shared room, follows its own daily routine (sleeps, reads, uses the computer), remembers what happened, and talks to the others.
 
 Built with TypeScript, [three.js](https://threejs.org/) and [@pixiv/three-vrm](https://github.com/pixiv/three-vrm). It runs in the browser; there is no backend.
