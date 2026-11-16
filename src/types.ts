@@ -13,6 +13,9 @@ export interface Affordance {
   pose: 'sit' | 'lie' | 'stand'
 }
 
+/** axis-aligned floor rectangle */
+export type Footprint = { cx: number; cz: number; w: number; d: number }
+
 export interface WorldObject {
   id: string
   kind: string
@@ -21,7 +24,7 @@ export interface WorldObject {
   usePos: Vec2
   affordances: Affordance[]
   /** floor area that blocks walking (axis-aligned rectangle); omit for walk-through things like chairs */
-  footprint?: { cx: number; cz: number; w: number; d: number }
+  footprint?: Footprint
   /** where to walk to before stepping onto usePos (needed when usePos is inside the footprint) */
   approach?: Vec2
 }

@@ -186,9 +186,9 @@ export class Avatar {
     } else if (verb === 'use_computer') {
       const typeL = Math.sin(t * 17) * 0.06, typeR = Math.sin(t * 17 + 1.7) * 0.06
       P('hips'); P('spine', 0.12); P('chest', 0.05); P('neck', 0.08)
-      P('leftUpperArm', -0.75, 0, -1.2); P('rightUpperArm', -0.75, 0, 1.2)
-      P('leftLowerArm', 0, -1.35 + typeL); P('rightLowerArm', 0, 1.35 - typeR)
-      P('leftHand', 0.15 + typeR, 0, 0); P('rightHand', 0.15 + typeL, 0, 0)
+      P('leftUpperArm', TYPE_ARM.upX, 0, -TYPE_ARM.upZ); P('rightUpperArm', TYPE_ARM.upX, 0, TYPE_ARM.upZ)
+      P('leftLowerArm', 0, -TYPE_ARM.lowY + typeL); P('rightLowerArm', 0, TYPE_ARM.lowY - typeR)
+      P('leftHand', TYPE_ARM.handX + typeR, 0, 0); P('rightHand', TYPE_ARM.handX + typeL, 0, 0)
       headX = 0.12
     } else if (verb === 'read') {
       this.flip = Math.max(0, this.flip - dt * 3)
@@ -204,6 +204,18 @@ export class Avatar {
       P('leftLowerArm', 0, -0.25); P('rightLowerArm', 0, 0.25)
       P('leftHand'); P('rightHand')
       headY = 0.25
+    } else if (sit) {
+      // sitting idle (sofa, dining seat): hands rest on the thighs, so they stay out of the seat cushion
+      P('hips'); P('spine', 0.04 + 0.015 * breath); P('chest', 0.02 * breath); P('neck')
+      P('leftUpperArm', SIT_ARM.upX, 0, -SIT_ARM.upZ); P('rightUpperArm', SIT_ARM.upX, 0, SIT_ARM.upZ)
+      P('leftLowerArm', 0, -SIT_ARM.lowY); P('rightLowerArm', 0, SIT_ARM.lowY)
+      P('leftHand', SIT_ARM.handX); P('rightHand', SIT_ARM.handX)
+      if (speaking) {
+        // talk with the right hand, held high enough to clear a table in front
+        P('rightUpperArm', SIT_TALK.upX + Math.sin(t * 4.5) * 0.15, 0, SIT_TALK.upZ)
+        P('rightLowerArm', 0, SIT_TALK.lowY + Math.sin(t * 6.3) * 0.3)
+        P('rightHand', 0, 0, Math.sin(t * 6.3 + 1) * 0.2)
+      }
     } else {
       // standing idle: breathing + slow weight shift
       P('hips', 0, 0, Math.sin(t * 0.5) * 0.015)
@@ -278,5 +290,14 @@ export class Avatar {
     this.vrm.update(dt)
   }
 }
+
+/**
+ * Arm angles (radians) for typing, sitting idle and talking while seated. Tuned against public/models/room.glb
+ * with two sample VRMs: the typing hands stay above the keyboard, seated hands rest beside the thighs, and the
+ * talking hand rises to chest height, so arms stay clear of seats, the desk and the dining table.
+ */
+const TYPE_ARM = { upX: -1.25, upZ: 0.8, lowY: 1.15, handX: 0 }
+const SIT_ARM = { upX: -0.3, upZ: 1.3, lowY: 0.9, handX: 0.15 }
+const SIT_TALK = { upX: -0.6, upZ: -0.2, lowY: 1.8 }
 
 type BoneName = Parameters<VRM['humanoid']['getNormalizedBoneNode']>[0]

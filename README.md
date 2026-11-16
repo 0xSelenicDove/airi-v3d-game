@@ -96,19 +96,46 @@ Each agent runs two loops. A **slow loop** asks the brain for the next action on
 
 | File | What it does |
 | --- | --- |
-| [`src/world.ts`](src/world.ts) | Clock, objects and their affordances, occupancy, speech broadcast, navigation grid and A* |
+| [`src/world.ts`](src/world.ts) | Clock, objects and their affordances (from `src/room-layout.json`), occupancy, speech broadcast, navigation grid and A* |
 | [`src/agent.ts`](src/agent.ts) | Agent state machine, needs, observations, action validation, reflection trigger |
 | [`src/brain.ts`](src/brain.ts) | `MockBrain`, `LLMBrain`, JSON action parsing |
 | [`src/memory.ts`](src/memory.ts) | Memory stream, scored retrieval, pruning, (de)serialization |
 | [`src/avatar.ts`](src/avatar.ts) | VRM loading, procedural animation, name tags and bubbles |
-| [`src/main.ts`](src/main.ts) | Scene, furniture meshes, camera, persistence, debug overlay |
+| [`src/main.ts`](src/main.ts) | Scene, room model, camera, persistence, debug overlay |
 | [`src/types.ts`](src/types.ts) | Shared types (actions, observations, personas) |
 
 ### Customizing
 
 - **Add a persona**: add an entry to `personas` in `src/main.ts` (name, description, color, sleep window, bed) and a start position. Give it a bed in `src/world.ts`.
-- **Add an object**: add it to `World` in `src/world.ts` with `affordances` and, if it blocks walking, a `footprint`; add a matching mesh in `src/main.ts`. Furniture is currently defined in both places.
+- **Add an object**: place the furniture and its interaction in `tools/blender/build_room.py` and run it again (see below). The game reads the objects from `src/room-layout.json` and draws `public/models/room.glb`.
 - **Use your own model**: implement the `Brain` interface (`decide`, optionally `reflect`) in `src/brain.ts` and pass it to the agents in `src/main.ts`.
+
+### Room model (Blender)
+
+[`tools/blender/build_room.py`](tools/blender/build_room.py) assembles a furnished single room in Blender from the low-poly [Kenney Furniture Kit](https://kenney.nl/assets/furniture-kit) (CC0). The models it uses are in [`assets/kenney-furniture-kit`](assets/kenney-furniture-kit). The room has two beds, a wardrobe, a sofa, an armchair, a TV, a desk, a bookshelf, a kitchen with a fridge, sink and cooker, a dining table with stools, a washing machine, windows and a door. The game loads it at startup, and hides each wall that is between the camera and the room.
+
+The room is light: about 8,600 triangles, about 130 draw calls, no textures, and a GLB of about 500 KB.
+
+```bash
+blender -b --factory-startup -P tools/blender/build_room.py -- --repo .
+```
+
+It writes three files:
+
+| File | Content |
+| --- | --- |
+| `public/models/room.glb` | The room for three.js. Each piece of furniture is a `FURN_<id>` node. Interaction points are `IP_<id>_use` and `IP_<id>_approach` nodes. |
+| `src/room-layout.json` | Furniture footprints and interaction objects (`pos`, `usePos`, `approach`, `affordances`) in game coordinates, in the same shape as `WorldObject`. `src/world.ts` imports it. |
+| `assets/room.blend` | The same scene for editing in Blender. |
+
+The script stops with an error in these cases:
+
+- Two pieces of furniture intersect. It tests the real mesh triangles.
+- A sitting, lying or standing avatar would clip into furniture. It uses the poses in `src/avatar.ts`.
+- A seat or bed has the wrong height for those poses.
+- An interaction point cannot be reached on the navigation grid.
+
+Add `--render <dir>` to also save preview images.
 
 ## Known limitations
 
@@ -117,6 +144,8 @@ Each agent runs two loops. A **slow loop** asks the brain for the next action on
 - Animation is procedural, so it is stiffer than real motion clips (`.vrma` clip support would be a natural next step).
 - Agents separate with a simple push; head-on meetings in tight spaces can look awkward.
 - The LLM brain has only been tried with Gemini 2.5 Flash (no thinking) through 302.ai: about 2-3 s per decision, 10 of 11 replies exactly in format and 1 recovered, in a ~100 s run. Other models may need prompt tweaks. Agents also tend to chat repetitively.
+- VRM hair and cloth (spring bones) do not collide with furniture. Long hair can pass into a backrest or a mattress.
+- The arm poses for typing and sitting were tuned with two sample VRMs. A much larger model can still touch the furniture.
 - No automated tests.
 
 ## Inspiration

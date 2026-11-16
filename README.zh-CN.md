@@ -96,19 +96,46 @@ World（时钟、物体、占用、说话） ── Agent（需求、状态机�
 
 | 文件 | 作用 |
 | --- | --- |
-| [`src/world.ts`](src/world.ts) | 时钟、物体及其可供性、占用、说话广播、寻路网格和 A* |
+| [`src/world.ts`](src/world.ts) | 时钟、物体及其可供性（来自 `src/room-layout.json`）、占用、说话广播、寻路网格和 A* |
 | [`src/agent.ts`](src/agent.ts) | AI 状态机、需求、观察、动作校验、触发反思 |
 | [`src/brain.ts`](src/brain.ts) | `MockBrain`、`LLMBrain`、JSON 动作解析 |
 | [`src/memory.ts`](src/memory.ts) | 记忆流、评分检索、淘汰、序列化 |
 | [`src/avatar.ts`](src/avatar.ts) | VRM 加载、程序化动画、名字标签和气泡 |
-| [`src/main.ts`](src/main.ts) | 场景、家具模型、相机、持久化、调试层 |
+| [`src/main.ts`](src/main.ts) | 场景、房间模型、相机、持久化、调试层 |
 | [`src/types.ts`](src/types.ts) | 共享类型（动作、观察、人设） |
 
 ### 自定义
 
 - **添加人设**：在 `src/main.ts` 的 `personas` 里加一项（名字、描述、颜色、睡眠时段、床），并加上出生位置，再在 `src/world.ts` 里给它一张床。
-- **添加物体**：在 `src/world.ts` 的 `World` 里加入物体，写上 `affordances`，如果会挡路再加 `footprint`；同时在 `src/main.ts` 里加对应的模型。目前家具在这两处各定义了一次。
+- **添加物体**：在 `tools/blender/build_room.py` 里摆放家具并写好交互，然后重新运行（见下文）。游戏从 `src/room-layout.json` 读取物体，并显示 `public/models/room.glb`。
 - **使用自己的模型**：在 `src/brain.ts` 里实现 `Brain` 接口（`decide`，可选 `reflect`），然后在 `src/main.ts` 里把它交给 AI。
+
+### 房间模型（Blender）
+
+[`tools/blender/build_room.py`](tools/blender/build_room.py) 会在 Blender 里用低多边形的 [Kenney Furniture Kit](https://kenney.nl/assets/furniture-kit)（CC0）拼出一个带家具的单间，用到的模型放在 [`assets/kenney-furniture-kit`](assets/kenney-furniture-kit)。房间里有两张床、衣柜、沙发、单人沙发、电视、书桌、书架、厨房（冰箱、水槽、灶台）、餐桌和凳子、洗衣机、窗户和门。游戏启动时会加载它，并隐藏挡在相机和房间之间的墙。
+
+房间很轻量：约 8,600 个三角面、约 130 次绘制调用、没有贴图，GLB 约 500 KB。
+
+```bash
+blender -b --factory-startup -P tools/blender/build_room.py -- --repo .
+```
+
+它会生成三个文件：
+
+| 文件 | 内容 |
+| --- | --- |
+| `public/models/room.glb` | 给 three.js 用的房间。每件家具是一个 `FURN_<id>` 节点，交互点是 `IP_<id>_use` 和 `IP_<id>_approach` 节点。 |
+| `src/room-layout.json` | 家具占地范围和交互物体（`pos`、`usePos`、`approach`、`affordances`），使用游戏坐标，格式与 `WorldObject` 一致。`src/world.ts` 会导入它。 |
+| `assets/room.blend` | 同一个场景，可以在 Blender 里编辑。 |
+
+遇到下面这些情况，脚本会报错并停止：
+
+- 两件家具互相穿插（用真实网格的三角面检测）。
+- 坐着、躺着或站着的角色会和家具穿模（按 `src/avatar.ts` 里的姿势）。
+- 座椅或床的高度和这些姿势对不上。
+- 某个交互点在寻路网格上走不到。
+
+加上 `--render <目录>` 还会输出预览图。
 
 ## 已知限制
 
@@ -117,6 +144,8 @@ World（时钟、物体、占用、说话） ── Agent（需求、状态机�
 - 动画是程序生成的，比真实动作片段更僵硬（后续可以支持 `.vrma` 动画片段）。
 - AI 之间只用简单的推挤避让，在狭窄处迎面相遇可能显得别扭。
 - LLM 大脑目前只试过通过 302.ai 调用的 Gemini 2.5 Flash（不思考模式）：每次决策约 2-3 秒，约 100 秒的运行中 11 次回复里 10 次格式完全正确、1 次被识别修正。其他模型可能需要调整提示词。AI 之间的聊天也容易重复。
+- VRM 的头发和衣物（弹簧骨骼）不会和家具碰撞，长发可能伸进靠背或床垫里。
+- 打字和坐姿的手臂动作是用两个示例 VRM 调出来的，体型大很多的模型仍可能碰到家具。
 - 没有自动化测试。
 
 ## 灵感来源

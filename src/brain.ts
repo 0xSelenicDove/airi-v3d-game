@@ -1,4 +1,11 @@
-import type { Action, Brain, Observation, Persona } from './types'
+import type { Action, Brain, NeedName, Observation, Persona } from './types'
+
+/** the need each activity mainly serves, for the mock brain; other verbs are chores */
+const VERB_NEED: Record<string, NeedName> = {
+  use_computer: 'fun', relax: 'fun', read: 'knowledge', eat: 'energy', grab_snack: 'energy', cook: 'energy',
+}
+/** chores (washing, laundry, changing clothes) win only now and then */
+const CHORE_SCORE = 25
 
 /**
  * Utility-based stand-in for an LLM. Replace with LLMBrain to drive agents with a real model.
@@ -27,12 +34,15 @@ export class MockBrain implements Brain {
     // be sociable now and then, and answer if spoken to
     if (obs.heard.length && Math.random() < 0.6) return { type: 'say', text: pick(['Oh, hi!', 'Yeah, same here.', 'How is your day going?']), thought: `${obs.others[0]?.name ?? 'Someone'} spoke to me` }
     if (obs.others.length && Math.random() < 0.12) return { type: 'say', text: pick(['Hello!', 'What are you up to?', 'Nice room, huh?']) }
-    const free = (id: string) => !obs.objects.find(o => o.id === id)?.inUseBy
     if (n.energy < 20 || (inSleepWindow && n.energy < 80)) return { type: 'interact', object: obs.yourBed, verb: 'sleep' }
-    const scores: [number, Action][] = [
-      [free('desk') ? 100 - n.fun : -1, { type: 'interact', object: 'desk', verb: 'use_computer' }],
-      [100 - n.knowledge, { type: 'interact', object: 'bookshelf', verb: 'read' }],
-    ]
+    // every free activity in the room, scored by how much the agent needs what it gives
+    const scores: [number, Action][] = obs.objects
+      .filter(o => !o.inUseBy)
+      .flatMap(o => o.verbs.filter(v => v !== 'sleep').map((v): [number, Action] => {
+        const need = VERB_NEED[v]
+        return [need ? 100 - n[need] : CHORE_SCORE, { type: 'interact', object: o.id, verb: v }]
+      }))
+    if (!scores.length) return { type: 'wait', minutes: 10 }
     scores.sort((a, b) => b[0] + Math.random() * 15 - (a[0] + Math.random() * 15))
     return scores[0][1]
   }
