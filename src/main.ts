@@ -7,6 +7,7 @@ import { Agent } from './agent'
 import { MockBrain, LLMBrain } from './brain'
 import { Avatar } from './avatar'
 import { MemoryStream } from './memory'
+import { Speaker, type VoiceStyle } from './tts'
 import type { Persona } from './types'
 
 const world = new World()
@@ -22,6 +23,16 @@ const personas: Persona[] = [
 ]
 const startPos = [{ x: 0, z: 0 }, { x: -1.5, z: 1.5 }]
 const agents = personas.map((p, i) => new Agent(p, startPos[i], brain, world))
+
+// text-to-speech: Airi lower and calmer, Luna higher and brisker; quieter the farther the camera is
+const speaker = new Speaker()
+const voiceStyles: VoiceStyle[] = [{ pitch: 1.0, rate: 0.95, prefer: 'Daniel' }, { pitch: 1.3, rate: 1.05, prefer: 'Samantha' }]
+agents.forEach((a, i) => {
+  a.onSay = text => {
+    const d = camera.position.distanceTo(new THREE.Vector3(a.pos.x, 1.2, a.pos.z))
+    speaker.say(a.persona, text, voiceStyles[i] ?? voiceStyles[0], Math.min(1, Math.max(0.15, 14 / (d + 4))))
+  }
+})
 
 // ---- persistence: memories + world clock survive reloads (add ?reset to the URL to wipe) ----
 const SAVE_KEY = 'airi-v3d-memory-v1'
@@ -167,6 +178,7 @@ const pathLines = agents.map(a => {
 const hud = document.getElementById('hud')!
 addEventListener('keydown', e => {
   if (e.key === 'g' || e.key === 'G') debug.visible = !debug.visible
+  if (e.key === 'm' || e.key === 'M') speaker.toggle()
   if (e.key === 'f' || e.key === 'F') follow = follow + 1 >= agents.length ? -1 : follow + 1
   if (e.key === 'r' || e.key === 'R') {
     follow = -1
@@ -214,7 +226,7 @@ function frame(now: number) {
   }
 
   hud.textContent =
-    `${world.clock}   speed x${world.speed} (1/2/3 speed, G nav, F follow, R reset)   brain: ${brain instanceof LLMBrain ? 'LLM' : 'mock'}${follow >= 0 ? `   following ${agents[follow].name}` : ''}\n` +
+    `${world.clock}   speed x${world.speed} (1/2/3 speed, G nav, F follow, R reset, M voice ${speaker.enabled ? 'on' : 'off'})   brain: ${brain instanceof LLMBrain ? 'LLM' : 'mock'}${follow >= 0 ? `   following ${agents[follow].name}` : ''}\n` +
     (brain instanceof LLMBrain && brain.status ? `⚠ ${brain.status}\n` : '') + '\n' +
     agents.map(a => a.statusText + (a.memory.length ? '\n  ' + a.memory.slice(-3).join('\n  ') : '')).join('\n\n')
 

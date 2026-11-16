@@ -19,6 +19,7 @@ Built with TypeScript, [three.js](https://threejs.org/) and [@pixiv/three-vrm](h
 - **VRM avatars** with procedural animation: walking, sitting and typing, reading with a book, sleeping, breathing, blinking, talking gestures, looking at nearby agents.
 - **In-world UI**: name tags, speech bubbles and thought bubbles above each agent.
 - **Camera**: orbit / pan / zoom and a follow mode.
+- **Voice**: agents speak aloud with the browser's built-in text-to-speech (a different voice per agent, quieter when far from the camera). It starts after your first click or key press.
 
 ## Quick start
 
@@ -53,6 +54,7 @@ Without them, the agents appear as colored capsules. You can also drag a `.vrm` 
 | `R` | Reset the view |
 | `1` / `2` / `3` | Game speed (normal / fast / fastest) |
 | `G` | Toggle the navigation debug overlay (blocked cells and routes) |
+| `M` | Mute / unmute the agents' voices |
 
 Add `?reset` to the URL (`http://localhost:5173/?reset`) to wipe saved memories and the clock.
 

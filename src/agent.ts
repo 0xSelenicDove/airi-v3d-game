@@ -19,6 +19,8 @@ export class Agent {
   speech = ''
   thought = ''
   speechUntil = 0
+  /** called whenever this agent says something aloud (used for text-to-speech) */
+  onSay?: (text: string) => void
   thoughtUntil = 0
   private lastResult?: string
   private inbox: string[] = []
@@ -185,6 +187,7 @@ export class Agent {
       this.speechUntil = performance.now() + 3000 + a.text.length * 70
       this.log(`said "${a.text}"`, 4)
       this.world.broadcast(this, a.text)
+      this.onSay?.(a.text)
       this.lastResult = 'said it'
       this.state = { k: 'idle' }
     } else if (a.type === 'wait') {
