@@ -137,8 +137,13 @@ scene.add(debug)
   cells.forEach((c, i) => inst.setMatrixAt(i, m.makeTranslation(c.x, 0.03, c.z)))
   debug.add(inst)
 }
+const MAX_PATH_POINTS = 32
 const pathLines = agents.map(a => {
-  const line = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: a.persona.color }))
+  // fixed-size buffer + draw range: setFromPoints() cannot shrink an existing attribute
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3 * MAX_PATH_POINTS), 3))
+  geo.setDrawRange(0, 0)
+  const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: a.persona.color }))
   line.frustumCulled = false
   debug.add(line)
   return line
@@ -162,6 +167,7 @@ const dayColor = new THREE.Color(0x9ec8ff)
 const nightColor = new THREE.Color(0x0a0f24)
 let last = performance.now()
 function frame(now: number) {
+  requestAnimationFrame(frame)
   const dt = Math.min(0.1, (now - last) / 1000)
   last = now
   const gameDt = world.advance(dt)
@@ -178,7 +184,11 @@ function frame(now: number) {
   if (debug.visible) {
     agents.forEach((a, i) => {
       const pts = a.state.k === 'moving' ? [a.pos, ...a.state.path] : []
-      pathLines[i].geometry.setFromPoints(pts.map(p => new THREE.Vector3(p.x, 0.08, p.z)))
+      const pos = pathLines[i].geometry.getAttribute('position') as THREE.BufferAttribute
+      const n = Math.min(pts.length, MAX_PATH_POINTS)
+      for (let k = 0; k < n; k++) pos.setXYZ(k, pts[k].x, 0.08, pts[k].z)
+      pos.needsUpdate = true
+      pathLines[i].geometry.setDrawRange(0, n)
     })
   }
 
@@ -189,6 +199,5 @@ function frame(now: number) {
 
   renderer.render(scene, camera)
   labelRenderer.render(scene, camera)
-  requestAnimationFrame(frame)
 }
 requestAnimationFrame(frame)
