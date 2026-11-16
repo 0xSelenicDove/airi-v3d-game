@@ -18,5 +18,6 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      - run: npm test
       # `npm run build` runs `tsc --noEmit` (typecheck) and then `vite build`
       - run: npm run build
