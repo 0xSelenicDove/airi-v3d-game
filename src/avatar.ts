@@ -1,7 +1,10 @@
 import * as THREE from 'three'
 import { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
-import { VRM, VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm'
+import {
+  VRM, VRMLoaderPlugin, VRMUtils, VRMSpringBoneCollider, VRMSpringBoneColliderShapeCapsule,
+  type VRMSpringBoneColliderGroup,
+} from '@pixiv/three-vrm'
 import type { Agent } from './agent'
 
 /**
@@ -13,6 +16,13 @@ export class Avatar {
   private inner = new THREE.Group()    // pitch (lying down) + vertical offset
   private capsule: THREE.Mesh
   private vrm?: VRM
+  /**
+   * Hair, skirts and ribbons are spring bones that know nothing about the bed, so lying down they sag through
+   * the mattress and the frame. While the avatar lies, this rounded slab (the top 0.5 m above the floor, like
+   * the mattress and the cot) is added to every joint's collider groups so they rest on it instead.
+   */
+  private bedGroup?: VRMSpringBoneColliderGroup
+  private bedCollider?: VRMSpringBoneCollider
   /** VRM 0.x rigs face -Z, so bone-local X and Z rotations are mirrored compared with VRM 1.0 */
   private v0 = false
   private hipsY = 0.9
@@ -100,6 +110,18 @@ export class Avatar {
     this.v0 = vrm.meta?.metaVersion === '0'
     this.capsule.visible = false
     this.inner.add(vrm.scene)
+
+    // a big capsule lying along the bed (the avatar's local z while lying), its top at BED_TOP: a wide, shallow
+    // curve, so what hangs over the side slides down beside the frame, and nothing is held up in mid air
+    const slab = new VRMSpringBoneCollider(new VRMSpringBoneColliderShapeCapsule({
+      radius: BED_RADIUS,
+      offset: new THREE.Vector3(0, BED_TOP - BED_RADIUS, -1.1),
+      tail: new THREE.Vector3(0, BED_TOP - BED_RADIUS, 1.1),
+    }))
+    this.root.add(slab)
+    this.bedCollider = slab
+    this.bedGroup = { colliders: [slab], name: 'bed' }
+    this.bedOn = false
 
     const hips = vrm.humanoid.getNormalizedBoneNode('hips')
     if (hips) {
@@ -290,9 +312,30 @@ export class Avatar {
       em.setValue('happy', lie ? 0.15 : this.happy)
       em.setValue('aa', speaking ? Math.max(0, 0.25 + Math.sin(t * 14) * 0.25 + Math.sin(t * 9.3) * 0.15) : 0)
     }
+    this.setBedCollision(lie)
     this.vrm.update(dt)
   }
+
+  private bedOn = false
+  /** Turn the bed on (lying) or off for every spring bone joint. */
+  private setBedCollision(on: boolean) {
+    const joints = this.vrm?.springBoneManager?.joints
+    const group = this.bedGroup
+    if (!joints || !group) return
+    if (on) this.bedCollider?.updateWorldMatrix(true, false) // keep the collider's matrix current for the physics
+    if (on === this.bedOn) return
+    this.bedOn = on
+    for (const j of joints) {
+      const i = j.colliderGroups.indexOf(group)
+      if (on && i < 0) j.colliderGroups.push(group)
+      else if (!on && i >= 0) j.colliderGroups.splice(i, 1)
+    }
+  }
 }
+
+/** top of the beds and cots (the mattress is 0.5 m, see tools/blender/build_room.py), and the curve radius of the slab */
+const BED_TOP = 0.5
+const BED_RADIUS = 1.5
 
 /**
  * Arm angles (radians) for typing, sitting idle and talking while seated. Tuned against public/models/room.glb
