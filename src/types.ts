@@ -11,6 +11,8 @@ export interface Affordance {
   effects: Partial<Needs>
   /** animation pose hint for the renderer */
   pose: 'sit' | 'lie' | 'stand'
+  /** only available from hour `[0]` up to (not including) `[1]`; may wrap past midnight, e.g. [20, 5] */
+  hours?: [number, number]
 }
 
 /** axis-aligned floor rectangle */
@@ -27,6 +29,8 @@ export interface WorldObject {
   footprint?: Footprint
   /** where to walk to before stepping onto usePos (needed when usePos is inside the footprint) */
   approach?: Vec2
+  /** in the yard rather than in the house */
+  outdoors?: boolean
 }
 
 export type Action = (
@@ -48,7 +52,7 @@ export interface Observation {
   hour: number
   location: string
   needs: Needs
-  objects: { id: string; kind: string; verbs: string[]; inUseBy?: string }[]
+  objects: { id: string; kind: string; verbs: string[]; inUseBy?: string; /** set for things in the yard */ outside?: true }[]
   /** other inhabitants and what they are doing */
   others: { name: string; activity: string; distance: number }[]
   /** things said nearby since your last decision */

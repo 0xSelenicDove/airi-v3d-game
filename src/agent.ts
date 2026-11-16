@@ -99,8 +99,9 @@ export class Agent {
       location: `(${this.pos.x.toFixed(1)}, ${this.pos.z.toFixed(1)})`,
       needs: { ...this.needs },
       objects: this.world.objects.map(o => ({
-        id: o.id, kind: o.kind, verbs: o.affordances.map(a => a.verb), inUseBy: this.world.occupant(o.id),
-      })),
+        id: o.id, kind: o.kind, verbs: o.affordances.filter(a => this.world.isAvailable(a)).map(a => a.verb),
+        inUseBy: this.world.occupant(o.id), ...(o.outdoors && { outside: true as const }),
+      })).filter(o => o.verbs.length),
       others: this.world.inhabitants
         .filter(i => i !== this)
         .map(i => ({ name: i.name, activity: i.activity, distance: +dist(this.pos, i.pos).toFixed(1) })),
@@ -197,6 +198,11 @@ export class Agent {
       const aff = obj?.affordances.find(x => x.verb === a.verb)
       if (!obj || !aff) {
         this.lastResult = `invalid action: no "${a.verb}" on "${a.object}"`
+        this.state = { k: 'waiting', left: 5 }
+        return
+      }
+      if (!this.world.isAvailable(aff)) {
+        this.lastResult = `invalid action: "${a.verb}" is not possible at this time of day`
         this.state = { k: 'waiting', left: 5 }
         return
       }

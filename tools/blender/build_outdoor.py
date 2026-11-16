@@ -6,6 +6,7 @@ Run from the repository root:
 
 Outputs:
     public/models/outdoor.glb   the scenery for three.js (GLTFLoader), loaded next to room.glb
+    src/yard-layout.json        the yard rectangle, the door, what blocks walking and the outdoor activities
     assets/outdoor.blend        the same scene, for editing in Blender
 
 Coordinates are the same as build_room.py: game (three.js) x right, y up, z toward the camera, the room
@@ -18,6 +19,7 @@ the stepping stones leave the door on the right wall (x = 5, z = 3) free, so not
 
 import bpy
 import bmesh
+import json
 import math
 import os
 import random
@@ -179,6 +181,19 @@ def in_yard(x, z, margin=0.0):
     return abs(x) < FX + margin and FZ0 - margin < z < FZ1 + margin
 
 
+# what the game needs to know: obstacles to walk around and the places agents can use (game coordinates)
+OBSTACLES = []
+OBJECTS = []
+
+
+def obstacle(cx, cz, w, d):
+    OBSTACLES.append({'cx': round(cx, 3), 'cz': round(cz, 3), 'w': round(w, 3), 'd': round(d, 3)})
+
+
+def r3(v):
+    return round(v, 3)
+
+
 # ---- ground ----
 # foundation under the room, walls start at z = 0 and the floor slab ends at -0.1
 B['foundation'].box(P(0, 0, -0.17), (10.5, 8.5, 0.30))
@@ -260,6 +275,7 @@ def pine_tree(x, z, s):
 for x, z, kind in ((-8.6, -7.4, 'round'), (8.2, -7.8, 'round'), (-9.2, 6.0, 'pine')):
     (round_tree if kind == 'round' else pine_tree)(x, z, rng.uniform(0.95, 1.15))
     placed.append((x, z, 2.2))
+    obstacle(x, z, 0.6, 0.6)  # the trunk
 
 tries = 0
 count = 0
@@ -291,6 +307,7 @@ bushes = [(-4.2, -4.55), (-0.2, -4.6), (2.9, -4.55), (4.4, -4.6), (-5.7, -2.4), 
           (2.0, 4.65), (-3.0, 4.6), (5.65, -1.6)]
 for bx, bz in bushes:
     sz = rng.uniform(0.38, 0.52)
+    obstacle(bx, bz, 1.3, 1.1)
     B[rng.choice(['leaf_a', 'leaf_b'])].blob(P(bx, bz, sz * 0.8 - 0.1), (0.62, 0.5, sz), rot=rng.uniform(0, 3), jitter=0.1, rng=rng)
     fm = rng.choice(flower_mats)
     for _ in range(5):
@@ -298,28 +315,79 @@ for bx, bz in bushes:
         B[fm].blob(P(fx, fz, sz * 1.5 - 0.15), (0.07, 0.07, 0.07))
 
 # ---- small props: rocks, mailbox, bench, vegetable patch ----
+BENCH = (-1.5, -6.6)    # faces the house
+PATCH = (-8.0, 1.5)
+MAILBOX = (FX - 0.9, DOOR_Z + 2.6)  # just inside the fence beside the gate
+FLOWERS = bushes[8]     # the bush south of the house, flowers on its far side
+KEEP_CLEAR = [(BENCH[0], BENCH[1], 2.0), (PATCH[0], PATCH[1], 2.4), (MAILBOX[0], MAILBOX[1], 1.4),
+              (FLOWERS[0], FLOWERS[1] + 0.9, 1.4), (7.5, 0.5, 1.2)] + [(p[0], p[1], 1.3) for p in placed[:3]]
 for _ in range(14):
     x, z = rng.uniform(-14, 14), rng.uniform(-11, 12)
     if abs(x) < 6.2 and abs(z) < 5.2 or abs(z - DOOR_Z) < 1.8 and x > 5:
         continue
+    if any((x - kx) ** 2 + (z - kz) ** 2 < kr * kr for kx, kz, kr in KEEP_CLEAR):
+        continue
     s = rng.uniform(0.18, 0.42)
     B['rock'].blob(P(x, z, s * 0.4 - 0.18), (s, s * 0.85, s * 0.6), rot=rng.uniform(0, 3), jitter=0.18, rng=rng)
+    if in_yard(x, z) and s >= 0.25:
+        obstacle(x, z, 2.1 * s, 2.1 * s)
 
-mx, mz = FX - 0.9, DOOR_Z + 2.6   # mailbox just inside the fence beside the gate
+mx, mz = MAILBOX
 B['wood'].box(P(mx, mz, 0.55 - 0.19), (0.1, 0.1, 1.1))
 B['mail_red'].box(P(mx, mz, 1.2 - 0.19), (0.5, 0.26, 0.28))
+obstacle(mx, mz, 0.5, 0.3)
 
-bx0, bz0 = -1.5, -6.6              # bench facing the house, under the back windows' view
-B['wood'].box(P(bx0, bz0, 0.45 - 0.19), (1.5, 0.45, 0.07))
-B['wood'].box(P(bx0, bz0 - 0.2, 0.75 - 0.19), (1.5, 0.07, 0.4))
+# the bench seat is 0.46 m above the room floor, the height the avatar's sitting pose expects (src/avatar.ts)
+bx0, bz0 = BENCH
+B['wood'].box(P(bx0, bz0, 0.43), (1.5, 0.45, 0.07))
+B['wood'].box(P(bx0, bz0 - 0.2, 0.76), (1.5, 0.07, 0.4))
 for dx in (-0.65, 0.65):
-    B['wood'].box(P(bx0 + dx, bz0, 0.22 - 0.19), (0.08, 0.4, 0.45))
+    B['wood'].box(P(bx0 + dx, bz0, 0.115), (0.08, 0.4, 0.57))
+obstacle(bx0, bz0, 1.5, 0.5)
 
-vx, vz = -8.0, 1.5                 # vegetable patch on the left side
+vx, vz = PATCH                     # vegetable patch on the left side
 B['soil'].box(P(vx, vz, -0.1), (2.6, 1.8, 0.2))
 for i in range(4):
     for j in range(3):
         B['veg'].blob(P(vx - 0.9 + i * 0.6, vz - 0.6 + j * 0.6, 0.12), (0.2, 0.2, 0.18), rot=rng.uniform(0, 3))
+obstacle(vx, vz, 2.6, 1.8)
+
+# ---- what agents can do outside (game coordinates; see room-layout.json for the indoor ones) ----
+# `hours` limits an activity to part of the day [from, to) and may wrap past midnight.
+
+
+def aff(verb, duration, effects, pose='stand', hours=None):
+    a = {'verb': verb, 'duration': duration, 'effects': effects, 'pose': pose}
+    if hours:
+        a['hours'] = hours
+    return a
+
+
+def place_obj(id, kind, pos, use, affs, approach=None):
+    o = {'id': id, 'kind': kind, 'outdoors': True, 'pos': {'x': r3(pos[0]), 'z': r3(pos[1])},
+         'usePos': {'x': r3(use[0]), 'z': r3(use[1])}, 'affordances': affs}
+    if approach:
+        o['approach'] = {'x': r3(approach[0]), 'z': r3(approach[1])}
+    OBJECTS.append(o)
+
+
+DAY = [7, 19]
+# bench: two seats side by side. Hips sit on the seat, the use point is SIT_FORWARD (0.12 m) in front of them.
+for k, sx_ in enumerate((-0.4, 0.4), 1):
+    hx = bx0 + sx_
+    place_obj(f'bench_seat_{k}', 'garden bench seat', (hx, bz0 + 1.1), (hx, bz0 + 0.12),
+              [aff('relax', 45, {'fun': 18, 'energy': 8}, 'sit', DAY),
+               aff('read', 60, {'knowledge': 22, 'fun': 8, 'energy': -2}, 'sit', DAY)],
+              approach=(hx, bz0 + 0.225 + 0.5))
+place_obj('garden', 'vegetable garden', (vx, vz), (vx, vz + 0.9 + 0.4),
+          [aff('tend_garden', 40, {'fun': 12, 'knowledge': 6, 'energy': -6}, 'stand', DAY)])
+place_obj('mailbox', 'mailbox', (mx, mz), (mx - 0.7, mz),
+          [aff('check_mail', 10, {'fun': 6, 'knowledge': 3}, 'stand', [8, 20])])
+place_obj('flower_bush', 'flowering bush', FLOWERS, (FLOWERS[0], FLOWERS[1] + 0.55 + 0.45),
+          [aff('admire_flowers', 12, {'fun': 10}, 'stand', DAY)])
+place_obj('lawn', 'lawn', (7.5, -3.0), (7.5, 0.5),
+          [aff('enjoy_fresh_air', 25, {'fun': 10, 'energy': -2}, 'stand', DAY),
+           aff('stargaze', 40, {'fun': 18, 'energy': 3}, 'stand', [20, 5])])
 
 # ---- distant hills, a ring that fades into the fog ----
 for i in range(18):
@@ -355,6 +423,18 @@ with bpy.context.temp_override(**override, scene=scene, view_layer=bpy.context.v
     bpy.ops.export_scene.gltf(filepath=out_glb, use_selection=True, export_format='GLB', export_yup=True,
                               export_apply=True, export_cameras=False, export_lights=False)
 print('exported', out_glb, os.path.getsize(out_glb) // 1024, 'KB')
+
+yard = {
+    'about': 'Generated by tools/blender/build_outdoor.py. Game coordinates (three.js): x right, y up, z toward '
+             'the camera. Agents stay inside the fence; the only way in and out of the house is the door.',
+    'yard': {'x0': -FX, 'x1': FX, 'z0': FZ0, 'z1': FZ1},
+    'door': {'x': 5.0, 'z': DOOR_Z, 'halfWidth': 0.25},
+    'obstacles': OBSTACLES,
+    'objects': OBJECTS,
+}
+with open(os.path.join(REPO, 'src', 'yard-layout.json'), 'w', encoding='utf-8', newline='\n') as fh:
+    json.dump(yard, fh, indent=2, ensure_ascii=False)
+    fh.write('\n')
 
 os.makedirs(os.path.join(REPO, 'assets'), exist_ok=True)
 bpy.ops.wm.save_as_mainfile(filepath=os.path.join(REPO, 'assets', 'outdoor.blend'), copy=True)

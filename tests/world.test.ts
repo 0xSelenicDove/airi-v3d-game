@@ -29,6 +29,42 @@ describe('World navigation', () => {
     }
   })
 
+  it('the yard has activities and the way out of the house is the doorway', () => {
+    const out = w.objects.filter(o => o.outdoors)
+    expect(out.map(o => o.id)).toEqual(expect.arrayContaining(['bench_seat_1', 'garden', 'mailbox', 'lawn']))
+    // from the middle of the room to the garden: the route has to pass through the door in the right wall
+    const path = w.findPath({ x: 0, z: 0 }, w.find('garden')!.usePos)
+    const door = { x: w.door.x, z: w.door.z }
+    let through = false, prev = { x: 0, z: 0 }
+    for (const p of path) {
+      for (let t = 0; t <= 1; t += 0.01) {
+        const q = { x: prev.x + (p.x - prev.x) * t, z: prev.z + (p.z - prev.z) * t }
+        if (Math.abs(q.x - door.x) < 0.1 && Math.abs(q.z - door.z) <= w.door.halfWidth + 1e-6) through = true
+      }
+      prev = p
+    }
+    expect(through).toBe(true)
+  })
+
+  it('the house walls and the fence stay blocked, the doorway and the yard are open', () => {
+    expect(w.isFree({ x: w.bounds.w / 2, z: 0 })).toBe(false) // wall
+    expect(w.isFree({ x: w.bounds.w / 2, z: w.door.z + 0.1 })).toBe(true) // doorway
+    expect(w.isFree({ x: -w.bounds.w / 2, z: w.door.z })).toBe(false) // no door on the left wall
+    expect(w.isFree({ x: 8, z: 6 })).toBe(true) // lawn
+    expect(w.isFree({ x: w.yard.x1 - 0.1, z: 0 })).toBe(false) // fence
+  })
+
+  it('night-only and day-only activities follow the clock', () => {
+    const lawn = w.find('lawn')!
+    const stargaze = lawn.affordances.find(a => a.verb === 'stargaze')!
+    const fresh = lawn.affordances.find(a => a.verb === 'enjoy_fresh_air')!
+    expect(w.isAvailable(stargaze, 23)).toBe(true) // wraps past midnight
+    expect(w.isAvailable(stargaze, 3)).toBe(true)
+    expect(w.isAvailable(stargaze, 12)).toBe(false)
+    expect(w.isAvailable(fresh, 12)).toBe(true)
+    expect(w.isAvailable(fresh, 23)).toBe(false)
+  })
+
   it('walls are blocked and the room centre start is usable', () => {
     expect(w.isFree({ x: w.bounds.w / 2 - 0.05, z: 0 })).toBe(false)
     expect(w.isFree({ x: 100, z: 0 })).toBe(false)
