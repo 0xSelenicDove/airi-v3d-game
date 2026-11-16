@@ -118,6 +118,13 @@ new GLTFLoader().load(`${import.meta.env.BASE_URL}models/room.glb`, gltf => {
   scene.add(gltf.scene)
 }, undefined, e => console.warn('room load failed', e))
 
+// surroundings: yard, fence, trees and hills from tools/blender/build_outdoor.py. Pure scenery, no shadows
+// (the shadow camera only covers the room), and fog in the sky colour fades the far hills into the horizon.
+scene.fog = new THREE.Fog(0xffffff, 30, 85)
+new GLTFLoader().load(`${import.meta.env.BASE_URL}models/outdoor.glb`, gltf => {
+  scene.add(gltf.scene)
+}, undefined, e => console.warn('outdoor load failed', e))
+
 // avatars: capsule until a VRM loads
 const avatars = agents.map(a => {
   const av = new Avatar(a.persona.color)
@@ -209,7 +216,9 @@ function frame(now: number) {
   // day/night
   const h = world.minutes / 60 % 24
   const daylight = Math.max(0, Math.sin(((h - 6) / 24) * Math.PI * 2))
-  scene.background = nightColor.clone().lerp(dayColor, daylight)
+  const sky = nightColor.clone().lerp(dayColor, daylight)
+  scene.background = sky
+  ;(scene.fog as THREE.Fog).color.copy(sky)
   sun.intensity = 0.2 + daylight * 1.1
   hemi.intensity = 0.25 + daylight * 0.4
 
