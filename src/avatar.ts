@@ -7,6 +7,7 @@ import {
 } from '@pixiv/three-vrm'
 import { JUMP_AIR, JUMP_CROUCH, WALK_SPEED, type Agent } from './agent'
 import type { Emotion, Gesture } from './acting'
+import type { SkillMotion } from './skills'
 import type { Physics } from './physics'
 
 /**
@@ -31,7 +32,9 @@ export class Avatar {
   private walkP = 0
   /** how far the current gesture has blended in, 0..1, and which one it is (kept while it fades out) */
   private gestureW = 0
-  private gestureNow: Gesture | '' = ''
+  private gestureNow: Gesture | SkillMotion | '' = ''
+  /** whether the avatar's shoes are shown (they come off in bed, rule R1) */
+  private shoesShown = true
   /** how far the hips are lowered because the knees bend (crouching for a jump), metres */
   private crouchDrop = 0
   /** current weight of each VRM expression preset that shows an emotion */
@@ -384,6 +387,7 @@ export class Avatar {
       em.setValue('aa', speaking ? Math.max(0, 0.25 + Math.sin(t * 14) * 0.25 + Math.sin(t * 9.3) * 0.15) : 0)
     }
     this.setBedCollision(lie)
+    this.showShoes(agent.shoesOn)
     this.probeSurroundings(dt, agent, physics)
     this.vrm.update(dt)
   }
@@ -392,7 +396,7 @@ export class Avatar {
    * Arms, legs and torso of a gesture (`u` = 0..1 through it, `sec` = seconds since it started). Returns how far
    * the knees bend (0..1) so the hips can be lowered to keep the feet on the ground.
    */
-  private bodyGesture(g: Gesture, u: number, sec: number, t: number, w: number, P: PoseFn, sit: boolean): number {
+  private bodyGesture(g: Gesture | SkillMotion, u: number, sec: number, t: number, w: number, P: PoseFn, sit: boolean): number {
     // arm poses are written for the right side; the left side mirrors y and z
     const arm = (side: 1 | -1, up: V3, low: V3, hand: V3 = [0, 0, 0]) => {
       const n = side > 0 ? 'right' : 'left', m = (v: V3): V3 => [v[0], v[1] * side, v[2] * side]
@@ -442,6 +446,19 @@ export class Avatar {
       case 'think':
         arm(1, [-0.7, 0.6, 1.3], [0, 2.4, 0], [0.3, 0, 0]); arm(-1, [-0.3, 0, 1.2], [0, 1.6, 0])   // hand to the chin
         return 0
+      // ---- skill motions (skills/) ----
+      case 'reach_handle':                  // the right hand goes out to the door handle at waist height
+        arm(1, [0.1, 1.35, 0.5], [0, 0.25, 0]); return 0
+      case 'push_door':                     // arm out, leaning a little into the door as it opens
+        P('spine', 0.08, 0, 0, w)
+        arm(1, [0.1, 1.4, 0.35 - 0.1 * u], [0, 0.1, 0]); return 0
+      case 'pull_door':                     // hand on the handle, the elbow bending as the door comes
+        P('spine', -0.04, 0, 0, w)
+        arm(1, [0.1, 1.35, 0.45], [0, 0.2 + 0.9 * u, 0]); return 0
+      case 'shoes':                         // seated, bent forward, both hands down at the feet
+        P('spine', 0.5, 0, 0, w); P('chest', 0.3, 0, 0, w)
+        arm(1, [-0.9, 0, 1.15], [0, 0.3, 0]); arm(-1, [-0.9, 0, 1.15], [0, 0.3, 0])
+        return 0
       case 'jump': {
         if (sit) return 0
         // crouch, fly (legs tucked a little, arms up), land and straighten
@@ -463,7 +480,7 @@ export class Avatar {
   }
 
   /** head part of a gesture, applied after the look-at so it is not overridden */
-  private headGesture(g: Gesture, u: number, w: number, P: PoseFn) {
+  private headGesture(g: Gesture | SkillMotion, u: number, w: number, P: PoseFn) {
     switch (g) {
       case 'nod': P('head', 0.28 * Math.max(0, Math.sin(u * Math.PI * 4)), 0, 0, w); break
       case 'shake_head': P('head', 0, 0.45 * Math.sin(u * Math.PI * 4) * Math.sin(u * Math.PI), 0, w); break
@@ -472,6 +489,8 @@ export class Avatar {
       case 'think': P('head', 0.12, 0, 0.14, w); break
       case 'shrug': P('head', 0, 0, 0.12, w); break
       case 'cheer': P('head', -0.15, 0, 0, w); break
+      case 'shoes': P('head', 0.35, 0, 0, w); break
+      case 'reach_handle': case 'pull_door': case 'push_door': P('head', 0.12, 0, 0, w); break
     }
   }
 
@@ -487,6 +506,17 @@ export class Avatar {
 
   private bedOn = false
   /** Turn the bed on (lying) or off for every spring bone joint. */
+  /** show or hide the shoes: the parts whose material is named like a shoe (e.g. "Shoes_01_CLOTH") */
+  private showShoes(on: boolean) {
+    if (!this.vrm || on === this.shoesShown) return
+    this.shoesShown = on
+    this.vrm.scene.traverse(o => {
+      if (!(o instanceof THREE.Mesh)) return
+      const mats = Array.isArray(o.material) ? o.material : [o.material]
+      if (mats.some(m => /shoe/i.test(m.name))) o.visible = on
+    })
+  }
+
   private surfaces: { collider: VRMSpringBoneCollider; shape: VRMSpringBoneColliderShapePlane }[] = []
   private probeT = 0
 

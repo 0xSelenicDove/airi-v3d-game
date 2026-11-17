@@ -6,6 +6,7 @@ import { World, dist } from './world'
 import { Agent } from './agent'
 import { Social } from './social'
 import { Physics } from './physics'
+import { DOOR_LEAF, hinge, leaf } from './skills/door'
 import { MockBrain, LLMBrain } from './brain'
 import { Avatar } from './avatar'
 import { MemoryStream } from './memory'
@@ -179,7 +180,6 @@ const outdoorLights = world.lights.map(l => {
   return { light, base: l.intensity, flicker: l.flicker }
 })
 let doorAngle = 0
-let doorOpen = 0 // 0 closed .. 1 open
 new GLTFLoader().load(`${import.meta.env.BASE_URL}models/room.glb`, gltf => {
   gltf.scene.traverse(o => {
     if (o instanceof THREE.Mesh) o.castShadow = o.receiveShadow = true
@@ -205,10 +205,19 @@ new GLTFLoader().load(`${import.meta.env.BASE_URL}models/room.glb`, gltf => {
     })
     walls.push({ meshes, hide, fade: 0 })
   }
-  // the leaf swings open (about its hinge) when someone is at the door
+  // the leaf swings about its hinge as people open and close it by hand (skills/door.ts sets world.doorOpen)
   addSolids(gltf.scene, ROOM_SOLID)
   doorLeaf = gltf.scene.getObjectByName('DOOR_leaf')
   doorAngle = THREE.MathUtils.degToRad(Number(doorLeaf?.userData.open_angle ?? 0))
+  if (doorLeaf) {
+    // the door skill plans with DOOR_LEAF; say so if the model's door has moved or changed
+    const h = hinge(world), box = new THREE.Box3().setFromObject(doorLeaf)
+    const width = box.max.z - box.min.z
+    if (Math.hypot(doorLeaf.position.x - h.x, doorLeaf.position.z - h.z) > 0.05 || Math.abs(width - DOOR_LEAF.width) > 0.08 ||
+      Math.abs(Number(doorLeaf.userData.open_angle ?? 0) - DOOR_LEAF.openDeg) > 1) {
+      console.warn('room.glb DOOR_leaf no longer matches DOOR_LEAF in src/skills/door.ts', { at: doorLeaf.position, width })
+    }
+  }
   scene.add(gltf.scene)
   // the lamps glow warm at night, the glow fades out with the daylight (see frame())
   gltf.scene.updateMatrixWorld(true)
@@ -358,10 +367,11 @@ function frame(now: number) {
     const flick = l.flicker ? Math.sin(now * 0.017) * 0.17 + Math.sin(now * 0.041) * 0.11 : 0
     l.light.intensity = (1 - daylight) * l.base * (1 + flick)
   }
-  if (doorLeaf) {
-    const near = agents.some(a => dist(a.pos, world.door) < 1.3)
-    doorOpen += ((near ? 1 : 0) - doorOpen) * (1 - Math.exp(-dt * 7))
-    doorLeaf.rotation.y = doorAngle * doorOpen
+  if (doorLeaf) doorLeaf.rotation.y = doorAngle * world.doorOpen
+  if (physics) {
+    // the leaf is solid too: balls bounce off it, and gestures see it (R0)
+    const [a, b] = leaf(world, world.doorOpen)
+    physics.setDoor(a, b)
   }
 
   agents.forEach((a, i) => avatars[i].update(dt, a, physics))

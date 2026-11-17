@@ -13,6 +13,10 @@ export class World {
   readonly inhabitants: Inhabitant[] = []
   /** solid geometry for checking whether a body movement has room; unset until the physics engine has loaded */
   space?: Space
+  /** how far the house door is open, 0 (shut) .. 1 (open); people open and close it by hand (skills/door.ts) */
+  doorOpen = 0
+  /** who is using the door right now, so two people do not open and close it at the same time */
+  doorUser?: string
   /** objectId -> agent name; sitting/lying objects fit one agent at a time */
   private occupancy = new Map<string, string>()
   /** the house: 10 x 8 m, centred on the origin */
@@ -90,6 +94,31 @@ export class World {
     return true
   }
 
+  /**
+   * How far `p` is from the nearest piece of furniture (its footprint) or, inside the house, from a wall.
+   * Used for the few steps that leave the grid, such as squeezing along a bed to its side.
+   */
+  clearance(p: Vec2) {
+    let d = Infinity
+    for (const f of this.obstacles) {
+      const dx = Math.max(0, Math.abs(p.x - f.cx) - f.w / 2), dz = Math.max(0, Math.abs(p.z - f.cz) - f.d / 2)
+      d = Math.min(d, Math.hypot(dx, dz))
+    }
+    const hw = this.bounds.w / 2, hd = this.bounds.d / 2
+    if (Math.abs(p.x) < hw && Math.abs(p.z) < hd) d = Math.min(d, hw - Math.abs(p.x), hd - Math.abs(p.z))
+    return d
+  }
+
+  /** is every point of the segment at least `min` metres from furniture and walls? */
+  clearSegment(a: Vec2, b: Vec2, min: number) {
+    const n = Math.max(1, Math.ceil(dist(a, b) / 0.05))
+    for (let k = 0; k <= n; k++) {
+      const t = k / n
+      if (this.clearance({ x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t }) < min) return false
+    }
+    return true
+  }
+
   /** nearest free cell to p (BFS outward), for starts/goals that sit inside an obstacle */
   private nearestFree(p: Vec2): [number, number] | null {
     const si = Math.min(this.nx - 1, Math.max(0, this.ci(p.x))), sj = Math.min(this.nz - 1, Math.max(0, this.cj(p.z)))
@@ -111,8 +140,17 @@ export class World {
    * simplification). The final point is exactly `to`; `from` is not included.
    */
   findPath(from: Vec2, to: Vec2): Vec2[] {
+    return this.route(from, to) ?? [to]
+  }
+
+  /**
+   * Like findPath, but also keeps clear of the circles in `avoid` (people or things in the way), and returns
+   * null when there is no way round them.
+   */
+  route(from: Vec2, to: Vec2, avoid: { x: number; z: number; r: number }[] = []): Vec2[] | null {
     const s = this.nearestFree(from), g = this.nearestFree(to)
-    if (!s || !g) return [to]
+    if (!s || !g) return null
+    const inAvoid = (i: number, j: number) => avoid.some(c => Math.hypot(this.cx(i) - c.x, this.cz(j) - c.z) < c.r)
     const N = this.nx * this.nz, key = (i: number, j: number) => j * this.nx + i
     const gScore = new Float32Array(N).fill(Infinity), came = new Int32Array(N).fill(-1), closed = new Uint8Array(N)
     const open: [number, number][] = [] // [f, key]
@@ -132,13 +170,14 @@ export class World {
         if (!di && !dj) continue
         const ni = ci + di, nj = cj + dj
         if (ni < 0 || nj < 0 || ni >= this.nx || nj >= this.nz || this.blocked[key(ni, nj)]) continue
+        if (avoid.length && inAvoid(ni, nj) && !(ni === g[0] && nj === g[1])) continue
         // no cutting corners between two blocked neighbours
         if (di && dj && (this.blocked[key(ci + di, cj)] || this.blocked[key(ci, cj + dj)])) continue
         const nk = key(ni, nj), ng = gScore[cur] + Math.hypot(di, dj)
         if (ng < gScore[nk]) { gScore[nk] = ng; came[nk] = cur; open.push([ng + h(ni, nj), nk]) }
       }
     }
-    if (!found) return [to]
+    if (!found) return null
     const cells: Vec2[] = []
     for (let k = key(g[0], g[1]); k !== -1; k = came[k]) cells.push({ x: this.cx(k % this.nx), z: this.cz(Math.floor(k / this.nx)) })
     cells.reverse()
@@ -146,9 +185,10 @@ export class World {
     const pts: Vec2[] = [from, ...cells, to]
     const out: Vec2[] = []
     let anchor = 0
+    const clear = (a: Vec2, b: Vec2) => this.clearLine(a, b) && (!avoid.length || avoid.every(c => segDist(c, a, b) >= c.r))
     while (anchor < pts.length - 1) {
       let far = pts.length - 1
-      while (far > anchor + 1 && !this.clearLine(pts[anchor], pts[far])) far--
+      while (far > anchor + 1 && !clear(pts[anchor], pts[far])) far--
       out.push(pts[far])
       anchor = far
     }
@@ -218,3 +258,9 @@ export class World {
 
 export const clamp = (v: number, lo = 0, hi = 100) => Math.min(hi, Math.max(lo, v))
 export const dist = (a: Vec2, b: Vec2) => Math.hypot(a.x - b.x, a.z - b.z)
+/** distance from point p to the segment a-b */
+export function segDist(p: Vec2, a: Vec2, b: Vec2) {
+  const vx = b.x - a.x, vz = b.z - a.z, l2 = vx * vx + vz * vz
+  const t = l2 ? Math.max(0, Math.min(1, ((p.x - a.x) * vx + (p.z - a.z) * vz) / l2)) : 0
+  return Math.hypot(p.x - (a.x + vx * t), p.z - (a.z + vz * t))
+}
