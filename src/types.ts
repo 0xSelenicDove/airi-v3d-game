@@ -45,6 +45,10 @@ export type Action = (
 export interface Inhabitant {
   name: string
   pos: Vec2
+  /** sitting and lying inhabitants are on furniture, off the walkable floor */
+  pose: 'stand' | 'sit' | 'lie' | 'swim'
+  /** where it is walking to, or where it stands for an activity */
+  dest?: Vec2
   activity: string
   hear(from: string, text: string): void
 }

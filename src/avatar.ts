@@ -5,7 +5,7 @@ import {
   VRM, VRMLoaderPlugin, VRMUtils, VRMSpringBoneCollider, VRMSpringBoneColliderShapeCapsule,
   type VRMSpringBoneColliderGroup,
 } from '@pixiv/three-vrm'
-import type { Agent } from './agent'
+import { WALK_SPEED, type Agent } from './agent'
 
 /**
  * Visual body for an agent. Starts as a capsule, becomes a VRM once one loads.
@@ -27,6 +27,8 @@ export class Avatar {
   private v0 = false
   private hipsY = 0.9
   private walkP = 0
+  /** how far the wave gesture has blended in, 0..1 */
+  private waveW = 0
   private t = 0
   private yaw = 0
   private lookYaw = 0
@@ -174,7 +176,8 @@ export class Avatar {
     const t = this.t
     const now = performance.now()
     const st = agent.state
-    const moving = st.k === 'moving'
+    // legs walk only while the agent actually covers ground (a walker waiting behind someone stands still)
+    const moving = (st.k === 'moving' || st.k === 'chatting') && agent.speedNow > 0.05
     const verb = st.k === 'doing' ? st.aff.verb : ''
     const sit = agent.pose === 'sit', lie = agent.pose === 'lie', swim = agent.pose === 'swim'
     const speaking = !!agent.speech && now < agent.speechUntil
@@ -199,7 +202,8 @@ export class Avatar {
 
     const k = 1 - Math.exp(-dt * 12)        // pose blend rate
     const kSlow = 1 - Math.exp(-dt * 6)
-    if (moving) this.walkP += dt * 9
+    // about 0.9 strides per second at walking speed, slower when the agent slows down
+    if (moving) this.walkP += dt * 5.8 * Math.min(1.2, agent.speedNow / WALK_SPEED)
     const p = this.walkP, s = Math.sin(p), c = Math.cos(p)
     const breath = Math.sin(t * 1.7)
     const P = (n: BoneName, x = 0, y = 0, z = 0, rate = k) => this.pose(n, rate, x, y, z)
@@ -286,6 +290,15 @@ export class Avatar {
         P('rightLowerArm', 0, 1.2 + Math.sin(t * 6.3) * 0.3)
         P('rightHand', 0, 0, Math.sin(t * 6.3 + 1) * 0.2)
       }
+    }
+    // wave: right arm out to the side, forearm up and swinging (standing or walking only). It blends in on its
+    // own weight, so it fully replaces the arm pose above instead of settling halfway between the two.
+    const waving = agent.gesture === 'wave' && now < agent.gestureUntil && !sit && !lie && !swim
+    this.waveW += ((waving ? 1 : 0) - this.waveW) * (1 - Math.exp(-dt * 10))
+    if (this.waveW > 0.01) {
+      const wv = Math.sin(t * 10) * 0.3
+      P('rightUpperArm', 0, 0, -0.25, this.waveW); P('rightLowerArm', 0, 0, -1.45 + wv, this.waveW)
+      P('rightHand', 0, 0, wv * 0.5, this.waveW)
     }
     // fingers: relaxed curl
     for (const side of ['left', 'right'] as const) {
