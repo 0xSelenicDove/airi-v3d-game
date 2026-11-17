@@ -266,6 +266,14 @@ export class Avatar {
       P('leftLowerArm', 0, -1.7); P('rightLowerArm', 0, 1.7 - this.flip * 0.25)
       P('leftHand', 0, 0, 0); P('rightHand', 0, 0, this.flip * 0.3)
       headX = 0.3
+    } else if (verb === 'boat') {
+      // rowing: lean in and out with the oars, arms pulling and pushing together
+      const r = Math.sin(t * 2.6)
+      P('hips'); P('spine', 0.1 + r * 0.12); P('chest', 0.04); P('neck')
+      P('leftUpperArm', -0.6 + r * 0.5, 0, -0.9); P('rightUpperArm', -0.6 + r * 0.5, 0, 0.9)
+      P('leftLowerArm', 0, -(1.0 - r * 0.5)); P('rightLowerArm', 0, 1.0 - r * 0.5)
+      P('leftHand'); P('rightHand')
+      headX = 0.05
     } else if (swim) {
       // front crawl: the arms reach forward over the head and pull back, one after the other
       P('hips'); P('spine', 0, Math.sin(sw) * 0.12); P('chest', 0, Math.sin(sw) * 0.1); P('neck')

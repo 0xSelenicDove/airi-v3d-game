@@ -456,11 +456,10 @@ for i in range(26):
         for _ in range(4):
             B['veg'].frustum(P(sx + rng.uniform(-0.3, 0.3), sz + rng.uniform(-0.3, 0.3) * (1 if sz > lcz else -1), -0.13),
                              0.04, 0.0, rng.uniform(0.6, 1.1), sides=4, rot=rng.uniform(0, 1))
-for lx_, lz_ in ((24.6, 6.0), (25.2, 7.6), (24.0, 8.6), (23.4, 9.3), (19.0, 4.2), (17.6, 5.3)):  # lily pads
+for lx_, lz_ in ((24.8, 5.0), (25.4, 6.6), (24.9, 8.0), (24.2, 8.9), (20.5, 3.9), (19.2, 9.2)):  # lily pads
     B['veg'].frustum(P(lx_, lz_, -0.11), 0.32, 0.3, 0.01, sides=9)
     B['flower_pink'].blob(P(lx_ + 0.05, lz_, -0.08), (0.08, 0.08, 0.06))
-for dx, dz in ((1.6, 0.3), (2.3, 1.0), (0.8, 1.3)):  # ducks, on the east side
-    dx_, dz_ = lcx + dx + 1.0, lcz + dz
+for dx_, dz_ in ((18.2, 8.6), (17.5, 7.9), (19.4, 9.3)):  # ducks, in the south-west
     B['duck'].blob(P(dx_, dz_, -0.07), (0.2, 0.15, 0.13), rot=rng.uniform(0, 3))
     B['duck'].blob(P(dx_, dz_ + 0.14, 0.05), (0.09, 0.09, 0.09))
     B['beak'].box(P(dx_, dz_ + 0.25, 0.04), (0.05, 0.08, 0.03))
@@ -526,12 +525,18 @@ for (lx_, lz_), along in logs:
 # `hours` limits an activity to part of the day [from, to) and may wrap past midnight.
 
 
-def aff(verb, duration, effects, pose='stand', hours=None, orbit=None):
+def aff(verb, duration, effects, pose='stand', hours=None, orbit=None, orbit_z=None, lap=False, speed=None):
     a = {'verb': verb, 'duration': duration, 'effects': effects, 'pose': pose}
     if hours:
         a['hours'] = hours
     if orbit:  # swim in a circle of this radius while doing it; the use point is on the circle, due east of its centre
         a['orbit'] = orbit
+    if orbit_z:   # ... or an ellipse: `orbit` is its x radius and this its z radius
+        a['orbitZ'] = orbit_z
+    if lap:       # keep going after the time is up until the loop is finished, back at the use point
+        a['lap'] = True
+    if speed:     # m/s along the loop
+        a['speed'] = speed
     return a
 
 
@@ -565,10 +570,16 @@ for k, sx_ in enumerate((-0.45, 0.45), 1):
               [aff('fish', 45, {'fun': 14, 'knowledge': 4, 'energy': -2}, 'stand', [6, 20])])
 SWIM = {'fun': 24, 'energy': -10}
 R_SWIM = 0.9
-place_obj('swim_1', 'swimming water', (lcx, lcz), (18.6 + R_SWIM, 6.8),
-          [aff('swim', 50, SWIM, 'swim', [9, 18], orbit=R_SWIM)], approach=(15.2, 6.8))
-place_obj('swim_2', 'swimming water', (lcx, lcz), (21.4 + R_SWIM, 9.0),
-          [aff('swim', 50, SWIM, 'swim', [9, 18], orbit=R_SWIM)], approach=(21.4 + R_SWIM, 11.0))
+place_obj('swim_1', 'swimming water', (lcx, lcz), (18.0 + R_SWIM, 6.2),
+          [aff('swim', 50, SWIM, 'swim', [9, 18], orbit=R_SWIM)], approach=(15.2, 6.2))
+place_obj('swim_2', 'swimming water', (lcx, lcz), (19.0 + R_SWIM, 4.5),
+          [aff('swim', 50, SWIM, 'swim', [9, 18], orbit=R_SWIM)], approach=(19.9 + 0.9, 2.1))
+# the rowboat: moored at the end of the pier. The rider walks onto the pier end, steps into the boat and rows one
+# lap round an ellipse that starts at the mooring, then steps out again.
+BOAT_USE = (23.1, pz1 + 1.5)     # the seat: the boat's middle, 1.5 m beyond the end of the pier
+place_obj('rowboat', 'rowboat', (BOAT_USE[0], BOAT_USE[1] + 1.7), BOAT_USE,
+          [aff('boat', 50, {'fun': 22, 'energy': -6, 'knowledge': 2}, 'sit', [8, 19], orbit=1.6, orbit_z=1.0, lap=True, speed=0.9)],
+          approach=(px_, pz1 - 0.4))
 place_obj('campfire', 'campfire', FIRE, (FIRE[0] - 1.1, FIRE[1]),
           [aff('warm_up', 30, {'fun': 14, 'energy': 5}, 'stand', [17, 24])])
 for k, (cx_, zc) in enumerate(cots, 1):
@@ -606,6 +617,51 @@ for i in range(18):
     B[rng.choice(['hill_a', 'hill_b'])].blob(P(math.cos(a) * dist, math.sin(a) * dist, -h * 0.25), (w, w * rng.uniform(0.8, 1.1), h),
                                             rot=rng.uniform(0, 3), jitter=0.08, rng=rng)
 
+# ---- the rowboat: its own node, BOAT, so the game can move it. The origin is the middle of the seat (the rider's
+# hips), and +z is forward (the bow). It is moored at the end of the pier, bow to the south, where the game puts it
+# when nobody is rowing. The seat top is 0.46 m, the sitting height in src/avatar.ts; the waterline is at -0.12.
+BP = {}
+
+
+def bb(name):
+    if name not in BP:
+        BP[name] = Batch(materials[name])
+    return BP[name]
+
+
+def lbox(name, c, size):
+    bb(name).box(P(*c), size)
+
+
+def seg_slab(name, p0, p1, w, t):
+    """a flat strip from p0 to p1 (x, z, height), w wide, t thick"""
+    dx, dz = p1[0] - p0[0], p1[1] - p0[1]
+    n = math.hypot(dx, dz) or 1.0
+    ux, uz = -dz / n * w / 2, dx / n * w / 2
+    slab(bb(name), [P(p0[0] + ux, p0[1] + uz, p0[2]), P(p1[0] + ux, p1[1] + uz, p1[2]),
+                    P(p1[0] - ux, p1[1] - uz, p1[2]), P(p0[0] - ux, p0[1] - uz, p0[2])], t)
+
+
+H0, H1 = -0.25, 0.37                      # hull bottom and top
+lbox('wood', (0, -0.3, H0 + 0.025), (1.1, 2.4, 0.05))           # floor
+bb('wood').poly([P(0.55, 0.9, H0 + 0.05), P(0, 1.6, H0 + 0.05), P(-0.55, 0.9, H0 + 0.05)])   # floor of the bow
+for sx_ in (-1, 1):
+    lbox('blanket_a', (sx_ * 0.57, -0.3, (H0 + H1) / 2), (0.07, 2.4, H1 - H0))                # side planks, painted teal
+    lbox('pillow', (sx_ * 0.57, -0.3, H1 + 0.02), (0.11, 2.4, 0.04))                           # rail
+    slab(bb('blanket_a'), [P(sx_ * 0.57, 0.9, H0), P(0, 1.6, H0), P(0, 1.6, H1), P(sx_ * 0.57, 0.9, H1)], 0.07)
+    seg_slab('pillow', (sx_ * 0.57, 0.9, H1 + 0.04), (0, 1.6, H1 + 0.04), 0.1, 0.04)
+    lbox('wood', (sx_ * 0.5, 0.0, 0.40), (0.1, 0.32, 0.07))                                    # seat supports
+lbox('blanket_a', (0, -1.5, (H0 + H1) / 2), (1.2, 0.07, H1 - H0))                              # stern
+lbox('wood', (0, 0.0, 0.435), (1.15, 0.32, 0.05))                                              # the seat
+lbox('wood', (0, -1.0, 0.1), (1.05, 0.28, 0.04))                                               # a stern seat
+for sx_ in (-1, 1):                       # oars: out through the rowlocks and down into the water
+    seg_slab('trunk', (sx_ * 0.25, 0.3, 0.52), (sx_ * 1.75, -0.25, -0.1), 0.06, 0.04)
+    seg_slab('pillow', (sx_ * 1.45, -0.19, -0.02), (sx_ * 1.9, -0.3, -0.12), 0.24, 0.03)
+    lbox('trunk', (sx_ * 0.62, 0.3, 0.42), (0.06, 0.06, 0.12))                                 # the rowlock
+boat_root = bpy.data.objects.new('BOAT', None)
+coll.objects.link(boat_root)
+boat_root.location = P(BOAT_USE[0], BOAT_USE[1] - 0.12, 0)
+
 # ---- build objects ----
 objs = []
 for k, b in B.items():
@@ -614,7 +670,12 @@ for k, b in B.items():
     else:
         b.bm.free()
 
-tris = sum(len(o.data.polygons) for o in objs)
+for k, b in BP.items():
+    part = b.build('BOAT_' + k)
+    part.parent = boat_root
+    objs.append(part)
+objs.append(boat_root)
+tris = sum(len(o.data.polygons) for o in objs if o.type == 'MESH')
 print('meshes:', len(objs))
 
 # ---- export ----
@@ -638,6 +699,7 @@ yard = {
     'yard': {'x0': -FX, 'x1': FX, 'z0': FZ0, 'z1': FZ1},  # the fenced yard
     'gate': {'x': FX, 'z': DOOR_Z, 'halfWidth': 1.0},      # the gap in its right-hand side
     'area': AREA,                                           # everything agents may walk in
+    'boat': {'x': BOAT_USE[0], 'z': BOAT_USE[1] - 0.12, 'hw': 0.65, 'hl': 1.6},          # moored at the pier end
     'water': {'x': LAKE[0], 'z': LAKE[1], 'rx': LAKE[2], 'rz': LAKE[3]},   # the lake (an ellipse)
     'pier': {'x': PIER[0], 'z0': PIER[1], 'z1': PIER[2], 'w': PIER[3]},    # a dry strip across it
     'door': {'x': 5.0, 'z': DOOR_Z, 'halfWidth': 0.25},
@@ -653,6 +715,8 @@ os.makedirs(os.path.join(REPO, 'assets'), exist_ok=True)
 bpy.ops.wm.save_as_mainfile(filepath=os.path.join(REPO, 'assets', 'outdoor.blend'), copy=True)
 tri_count = 0
 for o in objs:
+    if o.type != 'MESH':
+        continue
     me = o.data
     me.calc_loop_triangles()
     tri_count += len(me.loop_triangles)

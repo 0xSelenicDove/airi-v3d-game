@@ -23,6 +23,8 @@ export class World {
   readonly gate = yardLayout.gate
   /** everything agents may walk in: the yard and a strip of meadow east of the fence */
   readonly area = yardLayout.area
+  /** where the rowboat is moored (it is moved while someone rows it) */
+  readonly boat = yardLayout.boat
   /** glowing things outdoors (campfire, tent lantern): the game lights them after dark */
   readonly lights = yardLayout.lights
   /** the doorway in the right-hand wall, the only way between house and yard */
@@ -183,7 +185,9 @@ export class World {
 
   /** Is this point in the lake (and not on the pier)? Agents there swim. */
   inWater(p: Vec2) {
-    const w = yardLayout.water, pier = yardLayout.pier
+    const w = yardLayout.water, pier = yardLayout.pier, boat = yardLayout.boat
+    // the moored boat counts as dry: stepping into and out of it is not swimming
+    if (Math.abs(p.x - boat.x) <= boat.hw && Math.abs(p.z - boat.z) <= boat.hl) return false
     const dx = (p.x - w.x) / w.rx, dz = (p.z - w.z) / w.rz
     if (dx * dx + dz * dz >= 1) return false
     return !(Math.abs(p.x - pier.x) <= pier.w / 2 && p.z <= pier.z1)

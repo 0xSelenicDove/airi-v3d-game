@@ -171,6 +171,8 @@ const GHOST = 0.08 // opacity of a wall that is in the way
 const walls: { meshes: THREE.Mesh[]; hide: () => boolean; fade: number }[] = []
 const lampLights: THREE.PointLight[] = []
 let doorLeaf: THREE.Object3D | undefined
+let boatNode: THREE.Object3D | undefined
+let boatYaw = 0
 // outdoor lights from the yard layout (the campfire, the tent lantern): off by day, on after dark
 const outdoorLights = world.lights.map(l => {
   const light = new THREE.PointLight(l.color, 0, l.distance, 2)
@@ -233,6 +235,7 @@ new GLTFLoader().load(`${import.meta.env.BASE_URL}models/outdoor.glb`, gltf => {
       Object.assign(o.material, { transparent: true, opacity: 0.3, depthWrite: false })
     }
   })
+  boatNode = gltf.scene.getObjectByName('BOAT')
   scene.add(gltf.scene)
   addSolids(gltf.scene, OUTDOOR_SOLID)
 }, undefined, e => console.warn('outdoor load failed', e))
@@ -357,6 +360,16 @@ function frame(now: number) {
   for (const l of outdoorLights) {
     const flick = l.flicker ? Math.sin(now * 0.017) * 0.17 + Math.sin(now * 0.041) * 0.11 : 0
     l.light.intensity = (1 - daylight) * l.base * (1 + flick)
+  }
+  if (boatNode) {
+    // the boat sits at its mooring, and follows whoever is rowing it (the rider's hips are 0.12 m behind the agent)
+    const rower = agents.find(a => a.state.k === 'doing' && a.state.aff.verb === 'boat')
+    const tx = rower ? rower.pos.x - Math.sin(rower.heading) * 0.12 : world.boat.x
+    const tz = rower ? rower.pos.z - Math.cos(rower.heading) * 0.12 : world.boat.z
+    const wantYaw = rower ? rower.heading : 0
+    boatYaw += Math.atan2(Math.sin(wantYaw - boatYaw), Math.cos(wantYaw - boatYaw)) * (1 - Math.exp(-dt * 8))
+    boatNode.position.set(tx, Math.sin(now * 0.0015) * 0.012, tz)
+    boatNode.rotation.set(0, boatYaw, Math.sin(now * 0.0011) * 0.015)
   }
   if (doorLeaf) {
     const near = agents.some(a => dist(a.pos, world.door) < 1.3)

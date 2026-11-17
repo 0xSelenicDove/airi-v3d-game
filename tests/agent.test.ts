@@ -18,7 +18,8 @@ describe('lake', () => {
     const w = new World()
     expect(w.inWater({ x: 19, z: 7 })).toBe(true)
     expect(w.inWater({ x: 23, z: 5 })).toBe(false) // on the pier
-    expect(w.inWater({ x: 23, z: 8 })).toBe(true)  // beyond its end
+    expect(w.inWater({ x: 25, z: 8 })).toBe(true)  // beyond its end
+    expect(w.inWater({ x: w.boat.x, z: w.boat.z })).toBe(false) // in the moored boat
     expect(w.inWater({ x: 10, z: 7 })).toBe(false) // on land
   })
 
@@ -40,5 +41,27 @@ describe('lake', () => {
     expect(a.pose === 'swim' || !w.inWater(a.pos)).toBe(true)
     run(a, () => a.state.k === 'doing')
     expect(a.pose).toBe('stand')
+  })
+})
+
+describe('rowboat', () => {
+  it('rows one lap and ends back at the mooring', () => {
+    const w = new World()
+    w.minutes = 13 * 60
+    const a = new Agent(persona, { x: 23, z: 6.4 }, brain, w)
+    a.state = { k: 'idle' }
+    const boat = w.find('rowboat')!
+    ;(a as unknown as { apply(x: unknown): void }).apply({ type: 'interact', object: 'rowboat', verb: 'boat' })
+    run(a, () => a.state.k === 'doing')
+    expect(a.pose).toBe('sit') // it never swims on the way into the boat
+    let farthest = 0
+    for (let i = 0; i < 20000 && a.state.k === 'doing'; i++) {
+      a.tick(0.05, 0.5)
+      farthest = Math.max(farthest, Math.hypot(a.pos.x - boat.usePos.x, a.pos.z - boat.usePos.z))
+    }
+    expect(a.state.k).not.toBe('doing')
+    expect(farthest).toBeGreaterThan(2.5) // it went round the loop (the ellipse is 3.2 m wide)
+    expect(Math.hypot(a.pos.x - boat.usePos.x, a.pos.z - boat.usePos.z)).toBeLessThan(0.01) // and came back
+    expect(a.needs.fun).toBeGreaterThan(60)
   })
 })

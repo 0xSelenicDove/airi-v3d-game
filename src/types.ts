@@ -20,8 +20,14 @@ export interface Affordance {
   pose: 'sit' | 'lie' | 'stand' | 'swim'
   /** only available from hour `[0]` up to (not including) `[1]`; may wrap past midnight, e.g. [20, 5] */
   hours?: [number, number]
-  /** swim in a circle of this radius (m) while doing it; the use point is on the circle, due east of its centre */
+  /** swim or row round a loop while doing it: a circle of this radius (m), or an ellipse with `orbitZ` as its z radius.
+   * The use point is on the loop, due east of its centre. */
   orbit?: number
+  orbitZ?: number
+  /** keep going after the time is up until the loop is finished, back at the use point (so a boat returns to its mooring) */
+  lap?: boolean
+  /** m/s along the loop (default 0.6) */
+  speed?: number
 }
 
 /** axis-aligned floor rectangle */
