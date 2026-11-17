@@ -1,4 +1,11 @@
 export type Vec2 = { x: number; z: number }
+export type Vec3 = { x: number; y: number; z: number }
+
+/** physical space queries; set on the World once the physics engine is ready (see physics.ts) */
+export interface Space {
+  /** is the segment from `from` along `dir` (normalised here) free of solid things for `reach` metres? */
+  isClear(from: Vec3, dir: Vec3, reach: number, ignore?: string): boolean
+}
 
 export type NeedName = 'energy' | 'fun' | 'knowledge'
 export type Needs = Record<NeedName, number> // 0..100, higher = better
@@ -39,7 +46,16 @@ export type Action = (
   | { type: 'interact'; object: string; verb: string }
   | { type: 'say'; text: string }
   | { type: 'wait'; minutes: number }
-) & { /** short inner monologue, shown in the HUD */ thought?: string }
+  /** act something out on the spot, e.g. "wave_right" or "nod" (see acting.ts) */
+  | { type: 'gesture'; gesture: string }
+) & {
+  /** short inner monologue, shown in the HUD */
+  thought?: string
+  /** facial emotion to show with the action, e.g. "happy" (see acting.ts) */
+  emotion?: string
+  /** a gesture to make while speaking */
+  gesture?: string
+}
 
 /** What the world needs to know about an agent (avoids a circular import with agent.ts). */
 export interface Inhabitant {

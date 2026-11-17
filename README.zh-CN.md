@@ -20,6 +20,8 @@
 - **寻路**：在家具和墙壁之间用网格 A* 绕行，并带调试可视化。
 - **偶遇**：AI 以从容的速度走路，彼此保持距离，迎面相遇时各自靠右让行。两个 AI 碰面时，会随机停下来闲聊、挥手打招呼，或者直接走过。
 - **VRM 形象**与程序化动画：走路、坐着打字、拿书阅读、睡觉、呼吸、眨眼、说话手势、看向附近的 AI。
+- **表演**：大模型（或模拟大脑）可以让身体做动作，比如挥手、举手、抬腿、点头、鞠躬、拍手、指向、伸懒腰、欢呼、跳起，也能设置表情（开心、难过、生气、惊讶、放松、害羞）。适用于任何 VRM。
+- **世界物理**（[Rapier](https://rapier.rs/)）：家具、墙、栅栏和树都是实体。只有身体有足够空间时动作才会执行，否则会告诉模型是什么挡住了。跳跃遵循重力，人走过时会把沙滩球推开，头发和衣服会贴着附近的靠背、桌子和墙。
 - **场景内 UI**：头顶的名字标签、对话气泡和思考气泡。
 - **相机**：旋转 / 平移 / 缩放，以及跟随模式。
 - **语音**：AI 说话时用浏览器自带的语音合成朗读（每个 AI 音色不同，离相机越远越轻）。需要先点一下页面或按任意键才会发声。
@@ -83,7 +85,8 @@ public/model2.vrm   # 第二个 AI（Luna）
 说明：
 
 - 每一轮会要求模型返回一个 JSON 动作，外加一句简短的 `thought`（想法）：
-  `{"thought":"...","type":"interact","object":"desk","verb":"use_computer"}`。其他动作有 `say`（说话）和 `wait`（等待）。
+  `{"thought":"...","type":"interact","object":"desk","verb":"use_computer"}`。其他动作有 `say`（说话）、`gesture`（做动作）和 `wait`（等待）。
+- 想做动作时，模型可以在 `say` 里加上 `"emotion"` 和 `"gesture"`，或者发送 `{"type":"gesture","gesture":"nod"}`。也可以像 [LumenAct](https://github.com/AaBb-coder/LumenAct) 那样在台词开头加标签：`（微笑）（挥挥右手）早上好！` 或 `(smile)(wave) Morning!`。`挥挥左手`、`把右手举高`、`抬起右腿` 这类中文指令（与 [HAST-SEC](https://github.com/sola1039/HAST-SEC) 相同的说法）会对应到动作。完整列表见 [`src/acting.ts`](src/acting.ts)。
 - 提示词里会列出所有合法动作；如果模型回复的格式有偏差（例如 `{"command":"sleep bed2"}`），只要意图明确也能被识别。统计数据可在控制台用 `dbg.brain.stats` 查看（`strict` / `coerced` / `failed`）。
 - 如果模型选了不存在的物体或动作，错误信息会在它下一轮的观察里返回给它。
 - 所有请求都由浏览器直接发出。如果你的服务器拦截跨域请求，请允许 `http://localhost:5173`（Ollama 需要设置 `OLLAMA_ORIGINS`）。
@@ -104,6 +107,8 @@ World（时钟、物体、占用、说话） ── Agent（需求、状态机�
 | [`src/world.ts`](src/world.ts) | 时钟、物体及其可供性（来自 `src/room-layout.json`）、占用、说话广播、寻路网格和 A* |
 | [`src/agent.ts`](src/agent.ts) | AI 状态机、需求、观察、动作校验、触发反思、走路和避让 |
 | [`src/social.ts`](src/social.ts) | 偶遇：两个 AI 碰面时打招呼、挥手和闲聊 |
+| [`src/acting.ts`](src/acting.ts) | AI 能表演的动作和表情，以及大模型可以使用的说法和标签 |
+| [`src/physics.ts`](src/physics.ts) | Rapier 物理世界：实体场景、AI 的身体、沙滩球，以及动作的空间检测 |
 | [`src/brain.ts`](src/brain.ts) | `MockBrain`、`LLMBrain`、JSON 动作解析 |
 | [`src/memory.ts`](src/memory.ts) | 记忆流、评分检索、淘汰、序列化 |
 | [`src/avatar.ts`](src/avatar.ts) | VRM 加载、程序化动画、名字标签和气泡 |
@@ -151,7 +156,8 @@ blender -b --factory-startup -P tools/blender/build_room.py -- --repo .
 - 偶遇时的闲聊用的是按情境挑选的固定台词，不是大模型生成的。
 - 在狭窄的通道里，如果有人一直不动，走路的 AI 最多等 4 秒，然后从旁边挤过去。
 - LLM 大脑目前只试过通过 302.ai 调用的 Gemini 2.5 Flash（不思考模式）：每次决策约 2-3 秒，约 100 秒的运行中 11 次回复里 10 次格式完全正确、1 次被识别修正。其他模型可能需要调整提示词。AI 之间的聊天也容易重复。
-- VRM 的头发和衣物（弹簧骨骼）不会和家具碰撞，长发可能伸进靠背或床垫里。
+- 头发和衣服在每个方向上贴着最近的表面（一个平面），所以弯曲得很厉害的家具仍可能被稍微穿过。
+- 动作是程序化的姿势，不是动作捕捉，也不是由动作模型生成的。AI 仍在寻路网格上走路；物理只移动沙滩球，并检查动作的空间。
 - 打字和坐姿的手臂动作是用两个示例 VRM 调出来的，体型大很多的模型仍可能碰到家具。
 - 没有自动化测试。
 
