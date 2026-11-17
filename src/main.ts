@@ -4,6 +4,7 @@ import { CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { World, dist } from './world'
 import { Agent } from './agent'
+import { Social } from './social'
 import { MockBrain, LLMBrain } from './brain'
 import { Avatar } from './avatar'
 import { MemoryStream } from './memory'
@@ -23,6 +24,8 @@ const personas: Persona[] = [
 ]
 const startPos = [{ x: 0, z: 0 }, { x: -1.5, z: 1.5 }]
 const agents = personas.map((p, i) => new Agent(p, startPos[i], brain, world))
+// chance meetings: greetings and small talk when two of them run into each other
+const social = new Social(world, agents)
 
 // text-to-speech: Airi lower and calmer, Luna higher and brisker; quieter the farther the camera is
 const speaker = new Speaker()
@@ -173,17 +176,27 @@ const avatars = agents.map(a => {
   av.setName(a.name, a.persona.color)
   return av
 })
-// per-agent default models (public/model.vrm, public/model2.vrm); falls back to the capsule.
+// per-agent models (public/model.vrm, public/model2.vrm); the capsule shows until one loads.
 // Vite's SPA fallback serves HTML for missing files, so sniff the "glTF" magic.
-const modelUrls = ['model.vrm', 'model2.vrm'].map(f => import.meta.env.BASE_URL + f)
-modelUrls.forEach((u, i) => {
+// Without your own file, the public sample avatar in public/models/avatars is used (licenses in the README there).
+const modelUrls = [
+  ['model.vrm', 'models/avatars/vrm1-constraint-twist-sample.vrm'],
+  ['model2.vrm', 'models/avatars/seed-san.vrm'],
+].map(files => files.map(f => import.meta.env.BASE_URL + f))
+async function fetchVrm(url: string) {
+  const b = await fetch(url).then(r => (r.ok ? r.blob() : null)).catch(() => null)
+  return b && (await b.slice(0, 4).text()) === 'glTF' ? b : null
+}
+modelUrls.forEach(async (urls, i) => {
   if (!avatars[i]) return
-  fetch(u).then(r => r.blob()).then(async b => {
-    if ((await b.slice(0, 4).text()) !== 'glTF') return
+  for (const u of urls) {
+    const b = await fetchVrm(u)
+    if (!b) continue
     const url = URL.createObjectURL(b)
-    await avatars[i].load(url).catch(e => console.warn('VRM load failed', e))
+    await avatars[i].load(url).catch(e => console.warn('VRM load failed', u, e))
     URL.revokeObjectURL(url)
-  })
+    return
+  }
 })
 // drag & drop a .vrm onto the page: it goes to the agent whose half of the screen you drop on
 addEventListener('dragover', e => e.preventDefault())
@@ -194,7 +207,7 @@ addEventListener('drop', e => {
   if (f && f.name.toLowerCase().endsWith('.vrm')) avatars[i].loadFile(f).catch(err => console.warn(err))
 })
 
-;(window as any).dbg = { world, agents, avatars, camera, controls, brain } // handy for console poking
+;(window as any).dbg = { world, agents, avatars, camera, controls, brain, social } // handy for console poking
 
 // ---- navigation debug overlay (press G) ----
 const debug = new THREE.Group()
@@ -253,6 +266,7 @@ function frame(now: number) {
   last = now
   const gameDt = world.advance(dt)
   agents.forEach(a => a.tick(dt, gameDt))
+  social.update(dt)
 
   // day/night
   const h = world.minutes / 60 % 24

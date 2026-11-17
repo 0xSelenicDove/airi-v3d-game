@@ -79,7 +79,7 @@ export class World {
     return i >= 0 && j >= 0 && i < this.nx && j < this.nz && !this.blocked[j * this.nx + i]
   }
 
-  private clearLine(a: Vec2, b: Vec2) {
+  clearLine(a: Vec2, b: Vec2) {
     const n = Math.ceil(dist(a, b) / (this.cell / 5))
     for (let k = 0; k <= n; k++) {
       const t = n ? k / n : 0

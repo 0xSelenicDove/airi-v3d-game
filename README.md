@@ -2,7 +2,7 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-**[Live demo](https://0xselenicdove.github.io/airi-v3d-game/)** (runs with the mock brain and capsule avatars; add your own `.vrm` models and LLM locally for the full experience)
+**[Live demo](https://0xselenicdove.github.io/airi-v3d-game/)** (runs with the mock brain and two public sample avatars; add your own `.vrm` models and LLM locally for the full experience)
 
 A small 3D world that is driven entirely by AI. Think "VRChat, but the inhabitants are AIs": each AI has a VRM avatar, lives in a shared room, follows its own daily routine (sleeps, reads, uses the computer), remembers what happened, and talks to the others.
 
@@ -18,6 +18,7 @@ Built with TypeScript, [three.js](https://threejs.org/) and [@pixiv/three-vrm](h
 - **Memory** in the style of *Generative Agents*: a memory stream, recall by recency + importance + relevance, periodic reflection into insights, and persistence across reloads (`localStorage`).
 - **Multiple agents**: exclusive furniture (one person per bed/desk), speech that nearby agents actually hear, separate personas and sleep schedules.
 - **Pathfinding**: grid A* around furniture and walls, with a debug overlay.
+- **Chance meetings**: agents walk at a relaxed pace, keep their personal space and pass each other on the right. When two meet, they may stop for small talk, wave hello, or walk on.
 - **VRM avatars** with procedural animation: walking, sitting and typing, reading with a book, sleeping, breathing, blinking, talking gestures, looking at nearby agents.
 - **In-world UI**: name tags, speech bubbles and thought bubbles above each agent.
 - **Camera**: orbit / pan / zoom and a follow mode.
@@ -36,14 +37,14 @@ Open http://localhost:5173.
 
 ### Add avatar models
 
-The repo does not include any `.vrm` files. Put your own models here (any VRM 0.x or 1.0 file works):
+Put your own models here (any VRM 0.x or 1.0 file works):
 
 ```
 public/model.vrm    # first agent (Airi)
 public/model2.vrm   # second agent (Luna)
 ```
 
-Without them, the agents appear as colored capsules. You can also drag a `.vrm` file onto the page: it replaces the model of the agent on the half of the screen where you drop it.
+Without them, the game uses two public sample avatars from the official VRM samples, in [`public/models/avatars`](public/models/avatars): **Seed-san model by VirtualCast, Inc.** for Luna, and VRM1_Constraint_Twist_Sample by pixiv Inc. for Airi. Both are under the [VRM Public License 1.0](https://vrm.dev/licenses/1.0/). The agents show as colored capsules until a model loads. You can also drag a `.vrm` file onto the page: it replaces the model of the agent on the half of the screen where you drop it.
 
 ## Controls
 
@@ -101,7 +102,8 @@ Each agent runs two loops. A **slow loop** asks the brain for the next action on
 | File | What it does |
 | --- | --- |
 | [`src/world.ts`](src/world.ts) | Clock, objects and their affordances (from `src/room-layout.json`), occupancy, speech broadcast, navigation grid and A* |
-| [`src/agent.ts`](src/agent.ts) | Agent state machine, needs, observations, action validation, reflection trigger |
+| [`src/agent.ts`](src/agent.ts) | Agent state machine, needs, observations, action validation, reflection trigger, walking and avoiding others |
+| [`src/social.ts`](src/social.ts) | Chance meetings: greetings, waves and small talk when two agents meet |
 | [`src/brain.ts`](src/brain.ts) | `MockBrain`, `LLMBrain`, JSON action parsing |
 | [`src/memory.ts`](src/memory.ts) | Memory stream, scored retrieval, pruning, (de)serialization |
 | [`src/avatar.ts`](src/avatar.ts) | VRM loading, procedural animation, name tags and bubbles |
@@ -146,7 +148,8 @@ Add `--render <dir>` to also save preview images.
 - Only memories and the world clock are saved across reloads; positions and needs reset.
 - Relevance in memory recall is keyword overlap, not embeddings.
 - Animation is procedural, so it is stiffer than real motion clips (`.vrma` clip support would be a natural next step).
-- Agents separate with a simple push; head-on meetings in tight spaces can look awkward.
+- Small talk in chance meetings uses fixed lines picked for the situation, not the LLM.
+- In a narrow passage, a walker waits up to 4 s for someone who does not move, and then steps past them.
 - The LLM brain has only been tried with Gemini 2.5 Flash (no thinking) through 302.ai: about 2-3 s per decision, 10 of 11 replies exactly in format and 1 recovered, in a ~100 s run. Other models may need prompt tweaks. Agents also tend to chat repetitively.
 - VRM hair and cloth (spring bones) do not collide with furniture. Long hair can pass into a backrest or a mattress.
 - The arm poses for typing and sitting were tuned with two sample VRMs. A much larger model can still touch the furniture.
