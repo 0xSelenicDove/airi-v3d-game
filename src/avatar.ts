@@ -129,6 +129,7 @@ export class Avatar {
     VRMUtils.combineSkeletons(gltf.scene)
     VRMUtils.rotateVRM0(vrm) // make VRM0 models face +Z like VRM1
     vrm.scene.traverse(o => { o.frustumCulled = false; (o as THREE.Mesh).castShadow = true })
+    hideRoboParts(vrm.scene)
 
     if (this.vrm) { this.inner.remove(this.vrm.scene); VRMUtils.deepDispose(this.vrm.scene) }
     this.vrm = vrm
@@ -544,6 +545,44 @@ export class Avatar {
       else if (!on && i >= 0) j.colliderGroups.splice(i, 1)
     }
   }
+}
+
+/**
+ * Seed-san (the sample avatar for Luna) has a third, robot arm on its backpack, with a cable and a plug. It is not a
+ * humanoid bone, so no pose moves it: it stays stiff, sticks out and dips through beds. Avatars here have just two
+ * arms, so everything that hangs on the `robo_*` bones is removed: a vertex counts when a robo bone pulls it most,
+ * and every triangle with such a vertex is dropped (the cable is part of the clothes mesh, so a whole part cannot
+ * simply be hidden). A part with nothing left is hidden. Models without robo bones are left alone.
+ */
+function hideRoboParts(root: THREE.Object3D) {
+  root.traverse(o => {
+    const m = o as THREE.SkinnedMesh
+    if (!m.isSkinnedMesh) return
+    const robo = m.skeleton.bones.map(b => b.name.startsWith('robo_'))
+    if (!robo.some(Boolean)) return
+    const geo = m.geometry
+    const joint = geo.getAttribute('skinIndex'), weight = geo.getAttribute('skinWeight')
+    const gone = new Uint8Array(joint.count)
+    let n = 0
+    for (let v = 0; v < joint.count; v++) {
+      let best = 0, bw = -1
+      for (let k = 0; k < 4; k++) {
+        const w = weight.getComponent(v, k)
+        if (w > bw) { bw = w; best = joint.getComponent(v, k) }
+      }
+      if (robo[best]) { gone[v] = 1; n++ }
+    }
+    if (!n) return
+    const index = geo.index
+    if (!index) { if (n === joint.count) m.visible = false; return }
+    const keep: number[] = []
+    for (let i = 0; i < index.count; i += 3) {
+      const a = index.getX(i), b = index.getX(i + 1), c = index.getX(i + 2)
+      if (!gone[a] && !gone[b] && !gone[c]) keep.push(a, b, c)
+    }
+    if (!keep.length) m.visible = false
+    else geo.setIndex(keep)
+  })
 }
 
 /** top of the beds and cots (the mattress is 0.5 m, see tools/blender/build_room.py), and the curve radius of the slab */
