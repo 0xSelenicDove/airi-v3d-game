@@ -5,6 +5,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { World, dist } from './world'
 import { Agent } from './agent'
 import { Social } from './social'
+import { Physics } from './physics'
 import { MockBrain, LLMBrain } from './brain'
 import { Avatar } from './avatar'
 import { MemoryStream } from './memory'
@@ -71,6 +72,71 @@ labelRenderer.domElement.style.cssText = 'position:fixed;top:0;left:0;pointer-ev
 document.body.appendChild(labelRenderer.domElement)
 
 const scene = new THREE.Scene()
+
+// ---- physics (Rapier, loaded in the background): solid scenery, the agents' bodies and loose balls ----
+let physics: Physics | undefined
+const physicsReady = Physics.create()
+  .then(p => { physics = p; world.space = p; return p })
+  .catch(e => { console.warn('physics unavailable', e); return undefined })
+/** the part of a model a mesh belongs to: its own name, or the nearest named parent (multi-material nodes) */
+function partName(o: THREE.Object3D) {
+  for (let n: THREE.Object3D | null = o; n; n = n.parent) if (/^(FURN|Walls|Floor|OUT|DOOR|DECOR)/.test(n.name)) return n.name
+  return ''
+}
+/** turn the meshes of `root` that pass `solid` into fixed colliders, in world space */
+function addSolids(root: THREE.Object3D, solid: (name: string) => boolean) {
+  physicsReady.then(p => {
+    if (!p) return
+    root.updateMatrixWorld(true)
+    const v = new THREE.Vector3()
+    root.traverse(o => {
+      if (!(o instanceof THREE.Mesh) || !solid(partName(o))) return
+      const pos = o.geometry.getAttribute('position')
+      const out = new Float32Array(pos.count * 3)
+      for (let i = 0; i < pos.count; i++) {
+        v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld)
+        out.set([v.x, v.y, v.z], i * 3)
+      }
+      const index = o.geometry.getIndex()
+      const idx = index ? Uint32Array.from(index.array as ArrayLike<number>) : Uint32Array.from({ length: pos.count }, (_, i) => i)
+      p.addMesh(out, idx)
+    })
+  })
+}
+/** room: furniture, walls and floor are solid; rugs, curtains, cushions and pictures are not, nor the swinging door */
+const ROOM_SOLID = (n: string) => /^(FURN_|Walls_|Floor)/.test(n)
+/** outdoors: fences, trees, rocks, the tent, wood, the mailbox and the hills; plants, grass, water and fire are not */
+const OUTDOOR_SOLID = (n: string) => /^OUT_(fence|trunk|pine|leaf|rock|canvas|tent|foundation|wood|mail|lantern|hill)/.test(n)
+
+// two beach balls, one in the yard and one in the meadow: people who walk into them push them along
+const balls: { mesh: THREE.Mesh; prop: import('./physics').Prop }[] = []
+function beachBall(radius: number) {
+  const geo = new THREE.SphereGeometry(radius, 24, 16)
+  const colors = [0xe94b3c, 0xffffff, 0x2f80ed, 0xffffff, 0xf2c94c, 0xffffff].map(c => new THREE.Color(c))
+  const col = new Float32Array(geo.getAttribute('position').count * 3)
+  const pos = geo.getAttribute('position')
+  for (let i = 0; i < pos.count; i++) {
+    const y = pos.getY(i) / radius, a = Math.atan2(pos.getZ(i), pos.getX(i))
+    const c = Math.abs(y) > 0.93 ? colors[1] : colors[Math.floor(((a + Math.PI) / (2 * Math.PI)) * 6) % 6]
+    col.set([c.r, c.g, c.b], i * 3)
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3))
+  const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.45 }))
+  m.castShadow = true
+  return m
+}
+physicsReady.then(p => {
+  if (!p) return
+  for (const [id, want] of [['ball_yard', { x: 6.5, z: -2 }], ['ball_meadow', { x: 16, z: -4 }]] as const) {
+    // the nearest walkable spot, so the ball does not start inside something
+    let at: { x: number; z: number } = { ...want }
+    for (let r = 0; r < 4 && !world.isFree(at); r += 0.2) at = { x: want.x + r, z: want.z - r }
+    const prop = p.addBall(id, { x: at.x, y: 0.6, z: at.z })
+    const mesh = beachBall(prop.radius)
+    scene.add(mesh)
+    balls.push({ mesh, prop })
+  }
+})
 const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 100)
 const HOME = { pos: new THREE.Vector3(0, 9, 11), target: new THREE.Vector3(0, 0.5, 0) }
 camera.position.copy(HOME.pos)
@@ -140,6 +206,7 @@ new GLTFLoader().load(`${import.meta.env.BASE_URL}models/room.glb`, gltf => {
     walls.push({ meshes, hide, fade: 0 })
   }
   // the leaf swings open (about its hinge) when someone is at the door
+  addSolids(gltf.scene, ROOM_SOLID)
   doorLeaf = gltf.scene.getObjectByName('DOOR_leaf')
   doorAngle = THREE.MathUtils.degToRad(Number(doorLeaf?.userData.open_angle ?? 0))
   scene.add(gltf.scene)
@@ -167,6 +234,7 @@ new GLTFLoader().load(`${import.meta.env.BASE_URL}models/outdoor.glb`, gltf => {
     }
   })
   scene.add(gltf.scene)
+  addSolids(gltf.scene, OUTDOOR_SOLID)
 }, undefined, e => console.warn('outdoor load failed', e))
 
 // avatars: capsule until a VRM loads
@@ -207,7 +275,7 @@ addEventListener('drop', e => {
   if (f && f.name.toLowerCase().endsWith('.vrm')) avatars[i].loadFile(f).catch(err => console.warn(err))
 })
 
-;(window as any).dbg = { world, agents, avatars, camera, controls, brain, social } // handy for console poking
+;(window as any).dbg = { world, agents, avatars, camera, controls, brain, social, get physics() { return physics }, balls } // handy for console poking
 
 // ---- navigation debug overlay (press G) ----
 const debug = new THREE.Group()
@@ -267,6 +335,15 @@ function frame(now: number) {
   const gameDt = world.advance(dt)
   agents.forEach(a => a.tick(dt, gameDt))
   social.update(dt)
+  if (physics) {
+    for (const a of agents) physics.syncAgent(a.name, { x: a.pos.x, y: a.lift, z: a.pos.z }, a.pose)
+    physics.step(dt)
+    for (const b of balls) {
+      const t = b.prop.body.translation(), q = b.prop.body.rotation()
+      b.mesh.position.set(t.x, t.y, t.z)
+      b.mesh.quaternion.set(q.x, q.y, q.z, q.w)
+    }
+  }
 
   // day/night
   const h = world.minutes / 60 % 24
@@ -287,7 +364,7 @@ function frame(now: number) {
     doorLeaf.rotation.y = doorAngle * doorOpen
   }
 
-  agents.forEach((a, i) => avatars[i].update(dt, a))
+  agents.forEach((a, i) => avatars[i].update(dt, a, physics))
   if (debug.visible) {
     agents.forEach((a, i) => {
       const pts = a.state.k === 'moving' ? [a.pos, ...a.state.path] : []

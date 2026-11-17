@@ -1,6 +1,7 @@
 import type { Action, Brain, Needs, Observation, Persona, Vec2, WorldObject, Affordance } from './types'
 import { World, clamp, dist } from './world'
 import { MemoryStream } from './memory'
+import { GESTURE_INFO, emotionOf, gestureOf, type Emotion, type Gesture } from './acting'
 
 type State =
   | { k: 'idle' }
@@ -8,6 +9,8 @@ type State =
   | { k: 'moving'; path: Vec2[]; obj: WorldObject; aff: Affordance }
   | { k: 'doing'; obj: WorldObject; aff: Affordance; left: number; orbitAngle?: number }
   | { k: 'waiting'; left: number }
+  /** acting out a gesture on the spot; `left` is in real seconds */
+  | { k: 'gesturing'; gesture: Gesture; left: number }
   /** stopped to talk with someone; `resume` is the trip it interrupted */
   | { k: 'chatting'; with: Agent; resume?: { obj: WorldObject; aff: Affordance } }
 
@@ -20,6 +23,9 @@ export const PERSONAL_SPACE = 0.6
 const LOOKAHEAD = 1.6
 /** seconds a walker waits behind someone who does not move before it steps past as a last resort */
 const STUCK_LIMIT = 4
+/** jump timing in real seconds: crouch before take-off, then time in the air */
+export const JUMP_CROUCH = 0.22
+export const JUMP_AIR = 0.5
 
 export class Agent {
   pos: Vec2
@@ -41,9 +47,15 @@ export class Agent {
   heading = 0
   /** current walking speed in m/s, for the walk cycle */
   speedNow = 0
-  /** hand gesture shown until `gestureUntil` (performance.now ms) */
-  gesture: '' | 'wave' = ''
+  /** body gesture being played, from `gestureStart` until `gestureUntil` (performance.now ms) */
+  gesture: Gesture | '' = ''
+  gestureStart = 0
   gestureUntil = 0
+  /** facial emotion shown until `emotionUntil` (performance.now ms) */
+  emotion: Emotion = 'neutral'
+  emotionUntil = 0
+  /** height of the feet above the ground, for jumps */
+  lift = 0
   private stuck = 0
 
   constructor(public persona: Persona, start: Vec2, private brain: Brain, private world: World) {
@@ -65,7 +77,7 @@ export class Agent {
   get activity() {
     const s = this.state
     return s.k === 'doing' ? `${s.aff.verb} (${s.obj.id})` : s.k === 'moving' ? `walking to ${s.obj.id}` : s.k === 'waiting' ? 'idling'
-      : s.k === 'chatting' ? `chatting with ${s.with.name}` : 'standing around'
+      : s.k === 'chatting' ? `chatting with ${s.with.name}` : s.k === 'gesturing' ? GESTURE_INFO[s.gesture].label : 'standing around'
   }
 
   get dest(): Vec2 | undefined {
@@ -78,13 +90,52 @@ export class Agent {
     this.log(`heard ${from} say "${text}"`, 4)
   }
 
-  /** say something aloud: speech bubble, memory, text-to-speech, and optionally a wave */
-  say(text: string, wave = false) {
+  /** say something aloud: speech bubble, memory, text-to-speech, and optionally a face and a gesture */
+  say(text: string, act: { emotion?: Emotion; gesture?: Gesture } = {}) {
     this.speech = text
     this.speechUntil = performance.now() + 3000 + text.length * 70
-    if (wave) { this.gesture = 'wave'; this.gestureUntil = performance.now() + 1800 }
+    if (act.emotion) this.feel(act.emotion, 2.5 + text.length * 0.06)
+    if (act.gesture) this.play(act.gesture)
     this.log(`said "${text}"`, 4)
     this.onSay?.(text)
+  }
+
+  /** show an emotion on the face for `seconds` */
+  feel(emotion: Emotion, seconds = 3) {
+    this.emotion = emotion
+    this.emotionUntil = performance.now() + seconds * 1000
+  }
+
+  /**
+   * Why `g` cannot be done right now, or null if it can: the pose has to allow it, and the space the arms,
+   * legs or head move through has to be free of furniture, walls and other people.
+   */
+  whyNot(g: Gesture): string | null {
+    const info = GESTURE_INFO[g]
+    const pose = this.pose === 'sit' ? 'sit' : this.pose === 'stand' ? 'stand' : null
+    if (!pose || !info.poses.includes(pose)) return `cannot ${g.replace(/_/g, ' ')} while ${this.pose === 'lie' ? 'lying down' : this.pose === 'swim' ? 'swimming' : 'sitting'}`
+    const space = this.world.space
+    if (!space) return null
+    const s = Math.sin(this.heading), c = Math.cos(this.heading)
+    // the agent's own frame: x to its left, z forward; sitting lowers everything by about 0.4 m
+    const drop = pose === 'sit' ? 0.4 : 0
+    const toWorld = (x: number, z: number) => ({ x: x * c + z * s, z: -x * s + z * c })
+    for (const r of info.clear) {
+      const o = toWorld(r.from[0], r.from[2]), d = toWorld(r.dir[0], r.dir[2])
+      const from = { x: this.pos.x + o.x, y: r.from[1] - drop, z: this.pos.z + o.z }
+      if (!space.isClear(from, { x: d.x, y: r.dir[1], z: d.z }, r.reach, this.name)) return `no room to ${g.replace(/_/g, ' ')} here: something is in the way`
+    }
+    return null
+  }
+
+  /** start a gesture if there is room; returns the reason when not */
+  play(g: Gesture): string | null {
+    const why = this.whyNot(g)
+    if (why) return why
+    this.gesture = g
+    this.gestureStart = performance.now()
+    this.gestureUntil = this.gestureStart + GESTURE_INFO[g].duration * 1000
+    return null
   }
 
   /** stop and talk with `other`; endChat() resumes a trip in progress */
@@ -258,6 +309,10 @@ export class Agent {
         s.left -= gameDt
         if (s.left <= 0) this.state = { k: 'idle' }
         break
+      case 'gesturing':
+        s.left -= realDt
+        if (s.left <= 0) { this.lastResult = `${GESTURE_INFO[s.gesture].label}`; this.state = { k: 'idle' } }
+        break
       case 'chatting': {
         // close in to a comfortable talking distance, then face each other
         const d = dist(this.pos, s.with.pos)
@@ -272,6 +327,7 @@ export class Agent {
       }
     }
     if (this.speech && performance.now() > this.speechUntil) this.speech = ''
+    this.lift = this.jumpHeight()
     this.maybeReflect()
   }
 
@@ -279,10 +335,33 @@ export class Agent {
   private apply(a: Action) {
     if (a.thought) { this.thought = a.thought; this.thoughtUntil = performance.now() + 3500; this.log(`thought: ${a.thought}`, 3) }
     if (a.type === 'say') {
-      this.say(a.text)
+      const emotion = emotionOf(a.emotion), gesture = gestureOf(a.gesture)
+      this.say(a.text, { emotion })
       this.world.broadcast(this, a.text)
       this.lastResult = 'said it'
       this.state = { k: 'idle' }
+      if (gesture) {
+        const why = this.play(gesture)
+        if (why) this.lastResult = `said it, but ${why}`
+        else this.state = { k: 'gesturing', gesture, left: GESTURE_INFO[gesture].duration }
+      }
+    } else if (a.type === 'gesture') {
+      const gesture = gestureOf(a.gesture)
+      const emotion = emotionOf(a.emotion)
+      if (!gesture) {
+        this.lastResult = `invalid action: unknown gesture "${a.gesture}"`
+        this.state = { k: 'waiting', left: 5 }
+        return
+      }
+      const why = this.play(gesture)
+      if (why) {
+        this.lastResult = `invalid action: ${why}`
+        this.state = { k: 'waiting', left: 5 }
+        return
+      }
+      if (emotion) this.feel(emotion, GESTURE_INFO[gesture].duration + 1)
+      this.log(GESTURE_INFO[gesture].label, 2)
+      this.state = { k: 'gesturing', gesture, left: GESTURE_INFO[gesture].duration }
     } else if (a.type === 'wait') {
       this.state = { k: 'waiting', left: Math.max(1, Math.min(120, a.minutes)) }
     } else if (a.type === 'interact') {
@@ -359,6 +438,18 @@ export class Agent {
       scale = Math.min(scale, 0.35 + 0.65 * clamp((d - PERSONAL_SPACE) / 0.8, 0, 1))
     }
     return { dx: sx, dz: sz, scale }
+  }
+
+  /**
+   * Height of a jump in progress: a crouch, then a ballistic flight under gravity (g = 9.81 m/s^2), then the
+   * landing. The flight takes JUMP_AIR seconds, so the take-off speed is g * JUMP_AIR / 2.
+   */
+  private jumpHeight() {
+    if (this.gesture !== 'jump') return 0
+    const t = (performance.now() - this.gestureStart) / 1000 - JUMP_CROUCH
+    if (t <= 0 || t >= JUMP_AIR) return 0
+    const v0 = 9.81 * JUMP_AIR / 2
+    return v0 * t - 0.5 * 9.81 * t * t
   }
 
   /** would standing at `p` bring us closer than personal space to someone who stands or walks? */

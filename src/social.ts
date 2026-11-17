@@ -1,4 +1,5 @@
 import type { Agent } from './agent'
+import type { Emotion, Gesture } from './acting'
 import { World, dist } from './world'
 
 /** two people this close (metres) can notice each other */
@@ -8,7 +9,7 @@ const PART_RANGE = 3.2
 /** game minutes before the same two people can stop and chat again */
 const COOLDOWN = 60
 
-type Line = { by: Agent; text: string; wave?: boolean }
+type Line = { by: Agent; text: string; gesture?: Gesture; emotion?: Emotion }
 
 /** activity verbs as they read in a sentence; others just lose their underscores */
 const VERB_PHRASES: Record<string, string> = {
@@ -28,6 +29,13 @@ interface Talk {
   next: number
   /** both stopped to talk (a chat), or only exchanged a greeting in passing */
   stopped: boolean
+}
+
+/** the face that fits how someone feels: tired, bored or content */
+function moodOf(a: Agent): Emotion {
+  if (a.needs.energy < 30) return 'relaxed'
+  if (a.needs.fun < 30) return 'sad'
+  return 'happy'
 }
 
 const pick = <T>(xs: T[], r: () => number) => xs[Math.floor(r() * xs.length) % xs.length]
@@ -113,7 +121,7 @@ export class Social {
     if (!broken && t.i < t.lines.length) {
       const line = t.lines[t.i++]
       const other = line.by === t.a ? t.b : t.a
-      line.by.say(line.text, line.wave)
+      line.by.say(line.text, { gesture: line.gesture, emotion: line.emotion ?? 'happy' })
       other.overhear(line.by.name, line.text)
       t.next = 1.4 + line.text.length * 0.045
       return
@@ -163,8 +171,8 @@ export class Social {
 
   private chat(a: Agent, b: Agent): Line[] {
     const lines: Line[] = [
-      { by: a, text: this.greeting(b), wave: true },
-      { by: b, text: this.answer(a), wave: true },
+      { by: a, text: this.greeting(b), gesture: 'wave_right' },
+      { by: b, text: this.answer(a), gesture: 'wave_right' },
     ]
     const asked = new Set<string>()
     const n = 1 + Math.floor(this.rand() * 2)
@@ -175,22 +183,23 @@ export class Social {
       if (!topics.length) break
       const [q, ans] = topics[Math.floor(this.rand() * topics.length) % topics.length]
       asked.add(q)
-      lines.push({ by: asker, text: q }, { by: other, text: ans })
+      lines.push({ by: asker, text: q, gesture: this.rand() < 0.3 ? 'think' : undefined, emotion: 'neutral' },
+        { by: other, text: ans, gesture: this.rand() < 0.5 ? 'nod' : 'shrug', emotion: moodOf(other) })
     }
     lines.push({ by: a, text: pick(['See you later!', 'Talk later!', 'Catch you later.'], this.rand) })
-    lines.push({ by: b, text: pick(['Bye!', 'See you!', 'Later!'], this.rand), wave: true })
+    lines.push({ by: b, text: pick(['Bye!', 'See you!', 'Later!'], this.rand), gesture: 'wave_right' })
     return lines
   }
 
   private hello(a: Agent, b: Agent, stop: boolean): Line[] {
     return stop
-      ? [{ by: a, text: this.greeting(b), wave: true }, { by: b, text: this.answer(a), wave: true }]
-      : [{ by: a, text: pick(['Hi!', 'Hey!', `Hi, ${b.name}.`], this.rand), wave: true }, { by: b, text: pick(['Hey!', 'Hi!'], this.rand), wave: true }]
+      ? [{ by: a, text: this.greeting(b), gesture: 'wave_right' }, { by: b, text: this.answer(a), gesture: 'wave_right' }]
+      : [{ by: a, text: pick(['Hi!', 'Hey!', `Hi, ${b.name}.`], this.rand), gesture: 'wave_right' }, { by: b, text: pick(['Hey!', 'Hi!'], this.rand), gesture: 'wave_right' }]
   }
 
   private passBy(walker: Agent, other: Agent): Line[] {
     return [
-      { by: walker, text: pick([`Hi, ${other.name}!`, 'Hey there!', `Don't let me bother you, ${other.name}.`], this.rand), wave: true },
+      { by: walker, text: pick([`Hi, ${other.name}!`, 'Hey there!', `Don't let me bother you, ${other.name}.`], this.rand), gesture: 'wave_right' },
       { by: other, text: pick(['Hi!', 'Hey!', 'Oh, hi.'], this.rand) },
     ]
   }

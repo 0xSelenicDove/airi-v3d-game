@@ -1,4 +1,5 @@
 import type { Action, Brain, NeedName, Observation, Persona } from './types'
+import { actingHelp, gestureOf, splitTags } from './acting'
 
 /** the need each activity mainly serves, for the mock brain; other verbs are chores */
 const VERB_NEED: Record<string, NeedName> = {
@@ -38,8 +39,10 @@ export class MockBrain implements Brain {
     const inSleepWindow = s < e ? obs.hour >= s && obs.hour < e : obs.hour >= s || obs.hour < e
     const n = obs.needs
     // be sociable now and then, and answer if spoken to
-    if (obs.heard.length && Math.random() < 0.6) return { type: 'say', text: pick(['Oh, hi!', 'Yeah, same here.', 'How is your day going?']), thought: `${obs.others[0]?.name ?? 'Someone'} spoke to me` }
-    if (obs.others.length && Math.random() < 0.12) return { type: 'say', text: pick(['Hello!', 'What are you up to?', 'Nice room, huh?']) }
+    if (obs.heard.length && Math.random() < 0.6) {
+      return { type: 'say', text: pick(['Oh, hi!', 'Yeah, same here.', 'How is your day going?']), emotion: 'happy', gesture: pick(['nod', 'wave_right', '']) || undefined, thought: `${obs.others[0]?.name ?? 'Someone'} spoke to me` }
+    }
+    if (obs.others.length && Math.random() < 0.12) return { type: 'say', text: pick(['（微笑）（挥挥右手）Hello!', 'What are you up to?', '(happy) Nice room, huh?']) }
     if (n.energy < 20 || (inSleepWindow && n.energy < 80)) {
       // out camping, the tent is right there; otherwise camp out only now and then
       const cot = obs.objects.find(o => !o.inUseBy && o.verbs.includes('sleep_in_tent'))
@@ -56,6 +59,11 @@ export class MockBrain implements Brain {
         const verb = spot.verbs.find(v => v === 'sit_by_fire' || v === 'warm_up')!
         return { type: 'interact', object: spot.id, verb, thought: 'What a lovely evening, I will go and sit by the campfire.' }
       }
+    }
+    // now and then, act out how it feels: stretch when tired, think when curious, cheer when in a good mood
+    if (Math.random() < 0.08) {
+      const g = n.energy < 45 ? 'stretch' : n.knowledge < 40 ? 'think' : n.fun > 70 ? pick(['cheer', 'jump']) : pick(['nod', 'shrug', 'raise_right_hand'])
+      return { type: 'gesture', gesture: g, emotion: n.energy < 45 ? 'relaxed' : n.fun > 70 ? 'happy' : 'neutral', thought: 'Just moving a bit.' }
     }
     // every free activity in the room, scored by how much the agent needs what it gives
     const scores: [number, Action][] = obs.objects
@@ -139,9 +147,13 @@ export class LLMBrain implements Brain {
       `"memories" are things you recall that relate to the moment; "insights" are your own conclusions about your life. Let them shape your choices and what you say.\n\n` +
       `Choose ONE next action. Your reply MUST be exactly one JSON object with a "thought" key (one short sentence) plus ONE of these action shapes, copied exactly:\n` +
       legal.map(l => `- ${l.slice(0, -1)},"thought":"..."}`).join('\n') + '\n' +
-      `- {"type":"say","text":"<what you say aloud>","thought":"..."}\n` +
+      `- {"type":"say","text":"<what you say aloud>","emotion":"happy","gesture":"wave_right","thought":"..."}\n` +
+      `- {"type":"gesture","gesture":"nod","emotion":"happy","thought":"..."}\n` +
       `- {"type":"wait","minutes":10,"thought":"..."}\n` +
-      `Use only the "type" values interact, say, wait. Do not add any other keys, plans or commands. Output the JSON object only. If lastResult reports an error, pick a different action.`
+      `You have a body and a face: "gesture" moves your body and "emotion" sets your face. Both are optional on say; ` +
+      `you may also start the text with tags like (smile)(wave) or （微笑）（挥挥右手）. Available ${actingHelp()}. ` +
+      `A gesture only happens if there is room for it; lastResult tells you when something was in the way.\n` +
+      `Use only the "type" values interact, say, gesture, wait. Do not add any other keys, plans or commands. Output the JSON object only. If lastResult reports an error, pick a different action.`
 
     this.stats.calls++
     const t0 = performance.now()
@@ -199,7 +211,12 @@ export function parseAction(text: string): Action {
   if (end < 0) throw new Error('unterminated JSON')
   const a = JSON.parse(text.slice(start, end + 1))
   if (a.type === 'interact' && typeof a.object === 'string' && typeof a.verb === 'string') return a
-  if (a.type === 'say' && typeof a.text === 'string') return a
+  if (a.type === 'say' && typeof a.text === 'string') {
+    // tags at the start of the text, e.g. "（微笑）早上好", become the emotion and the gesture
+    const t = splitTags(a.text)
+    return { ...a, text: t.text || a.text, emotion: a.emotion ?? t.emotion, gesture: a.gesture ?? t.gesture }
+  }
+  if (a.type === 'gesture' && typeof a.gesture === 'string') return { ...a, gesture: gestureOf(a.gesture) ?? a.gesture }
   if (a.type === 'wait') return { ...a, minutes: Number(a.minutes) || 10 }
   throw new Error(`bad action: ${JSON.stringify(a).slice(0, 100)}`)
 }
