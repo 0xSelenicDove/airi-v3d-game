@@ -56,6 +56,8 @@ export class Avatar {
   private t = 0
   private yaw = 0
   private lookYaw = 0
+  /** where the agent was last frame, to see whether the body covered ground */
+  private lastPos: { x: number; z: number } | null = null
   private cur = { pitch: 0, y: 0, z: 0 }
   private nextFlip = 4
   private flip = 0
@@ -228,7 +230,15 @@ export class Avatar {
     const now = performance.now()
     const st = agent.state
     // legs walk only while the agent actually covers ground (a walker waiting behind someone stands still)
-    const moving = (st.k === 'moving' || st.k === 'chatting') && agent.speedNow > 0.05
+    // (also stepping along while opening or closing the door, or on the frame a walk hands over to the next step;
+    // not while sitting down or standing up, when the body moves with the legs folding)
+    const stepping = st.k === 'routine' && st.steps[0]?.do === 'act' && agent.pose === 'stand'
+    const posing = st.k === 'routine' && st.steps[0]?.do === 'pose'
+    const covered = this.lastPos && dt > 0 ? Math.hypot(agent.pos.x - this.lastPos.x, agent.pos.z - this.lastPos.z) / dt : 0
+    this.lastPos = { ...agent.pos }
+    const glide = agent.pose === 'stand' && !posing && covered > 0.2 && covered < WALK_SPEED * 2
+    const moving = ((st.k === 'moving' || st.k === 'chatting' || stepping) && agent.speedNow > 0.05) || glide
+    const stride = Math.max(moving && !glide ? agent.speedNow : 0, glide ? covered : 0)
     const verb = st.k === 'doing' ? st.aff.verb : ''
     const sit = agent.pose === 'sit', lie = agent.pose === 'lie', swim = agent.pose === 'swim'
     const speaking = !!agent.speech && now < agent.speechUntil
@@ -254,7 +264,7 @@ export class Avatar {
     const k = 1 - Math.exp(-dt * 12)        // pose blend rate
     const kSlow = 1 - Math.exp(-dt * 6)
     // about 0.9 strides per second at walking speed, slower when the agent slows down
-    if (moving) this.walkP += dt * 5.8 * Math.min(1.2, agent.speedNow / WALK_SPEED)
+    if (moving) this.walkP += dt * 5.8 * Math.min(1.2, stride / WALK_SPEED) * (agent.walkBack ? -1 : 1)
     const p = this.walkP, s = Math.sin(p), c = Math.cos(p)
     const breath = Math.sin(t * 1.7)
     const P = (n: BoneName, x = 0, y = 0, z = 0, rate = k) => this.pose(n, rate, x, y, z)

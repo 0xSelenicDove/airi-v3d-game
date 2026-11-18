@@ -29,8 +29,10 @@ const HANDLE = { in: 0.07, y: 0.95, out: 0.05 }
 const FOLLOW_R = 1.2
 /** how far the door is pushed by hand when going out, and pulled by hand when closing from inside: within reach */
 const PUSHED = 0.3
-/** seconds to open or close it by hand: slowly */
-export const DOOR_SECS = 1.6
+/** outside, one stands beside the leaf at the angle of a door this far open (waiting, or done closing it): clear of the wall */
+const OUTSIDE_AT = 0.15
+/** seconds to open or close the door while walking with its edge (about 1.5 m round the hinge): slowly, at an easy pace */
+const FOLLOW_SECS = 2.6
 
 export function hinge(world: World): Vec2 {
   return { x: world.door.x + DOOR_LEAF.hingeOffset.x, z: world.door.z + DOOR_LEAF.hingeOffset.z }
@@ -51,6 +53,12 @@ export function handle(world: World, open: number, face: 'in' | 'out'): Vec3 {
   // the outside face points along +x when shut, turning with the leaf
   const nx = Math.cos(a), nz = -Math.sin(a), s = face === 'out' ? HANDLE.out : -HANDLE.out
   return { x: h.x + Math.sin(a) * r + nx * s, y: HANDLE.y, z: h.z + Math.cos(a) * r + nz * s }
+}
+
+/** how far open the door would be for its leaf to point at `p` (0 shut, 1 fully open) */
+export function openAt(world: World, p: Vec2) {
+  const h = hinge(world)
+  return Math.atan2(p.x - h.x, p.z - h.z) / angle(1)
 }
 
 /** a spot outside, beside the leaf at the angle of a door that is `open`, clear of its swing */
@@ -77,7 +85,7 @@ export function doorSpots(world: World) {
     /** outside, round the free edge of the open leaf */
     round: { x: d.x + 1.3, z: d.z },
     /** outside, waiting for the door: clear of its swing */
-    outside: besideDoor(world, 0.15),
+    outside: besideDoor(world, OUTSIDE_AT),
   }
 }
 
@@ -116,7 +124,7 @@ export function throughDoor(world: World, from: Vec2): Step[] {
       // turn round, take the handle, and walk with the door as it closes
       { do: 'face', heading: 0, secs: 0.5, toHandle: 'out' },
       { do: 'act', motion: 'reach_handle', secs: 0.5, reach: 'out' },
-      { do: 'act', motion: 'pull_door', secs: DOOR_SECS, doorTo: 0.15, reach: 'out', follow: true },
+      { do: 'act', motion: 'pull_door', secs: FOLLOW_SECS, doorTo: OUTSIDE_AT, reach: 'out', follow: true },
       { do: 'act', motion: 'pull_door', secs: 0.4, doorTo: 0 },
       { do: 'door', take: false },
     ]
@@ -126,8 +134,9 @@ export function throughDoor(world: World, from: Vec2): Step[] {
     { do: 'walk', to: s.outside },
     { do: 'face', heading: 0, secs: 0.4, toHandle: 'out' },
     { do: 'act', motion: 'reach_handle', secs: 0.6, reach: 'out' },
-    // pull it open by the handle, walking back with it, clear of its swing
-    { do: 'act', motion: 'pull_door', secs: DOOR_SECS, doorTo: 1, reach: 'out', follow: true },
+    // pull it ajar by the handle, up to where one stands, then walk back with it as it opens, clear of its swing
+    { do: 'act', motion: 'pull_door', secs: 0.7, doorTo: OUTSIDE_AT, reach: 'out' },
+    { do: 'act', motion: 'pull_door', secs: FOLLOW_SECS, doorTo: 1, reach: 'out', follow: true },
     { do: 'squeeze', to: s.round },
     { do: 'squeeze', to: s.sill },
     { do: 'squeeze', to: s.threshold },

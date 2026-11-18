@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { Agent, PERSONAL_SPACE } from '../src/agent'
+import { Agent, PERSONAL_SPACE, WALK_SPEED } from '../src/agent'
 import { World, dist, segDist } from '../src/world'
 import { RULES } from '../src/skills'
 import { bedRect } from '../src/skills/bed'
@@ -82,13 +82,15 @@ describe('R3: the door', () => {
     const w = new World()
     w.minutes = 12 * 60
     const a = new Agent(persona('Airi', 'bed'), from, brain, w)
-    const log: { t: number; x: number; z: number; open: number; gesture: string; heading: number; reach: number | null }[] = []
+    const log: { t: number; x: number; z: number; open: number; gesture: string; heading: number; reach: number | null; standing: boolean }[] = []
     let t = 0
     send(a, object, verb)
     run([a], () => a.state.k === 'doing', () => {
       t += DT
       const r = a.reach && a.reach !== 'feet' ? Math.hypot(a.reach.x - a.pos.x, a.reach.z - a.pos.z) : null
-      log.push({ t, x: a.pos.x, z: a.pos.z, open: w.doorOpen, gesture: a.gesture, heading: a.heading, reach: r })
+      // standing on the feet (not sitting down, lying down or standing up, when the body blends between)
+      const standing = a.pose === 'stand' && !(a.state.k === 'routine' && a.state.steps[0]?.do === 'pose')
+      log.push({ t, x: a.pos.x, z: a.pos.z, open: w.doorOpen, gesture: a.gesture, heading: a.heading, reach: r, standing })
     })
     return { w, a, log }
   }
@@ -136,6 +138,21 @@ describe('R3: the door', () => {
       for (const s of log) {
         const [h, e] = leaf(w, s.open)
         expect(segDist({ x: s.x, z: s.z }, h, e)).toBeGreaterThan(0.25)
+      }
+    })
+
+    it(`${label}: moves smoothly, never jumping, and speeds up and slows down gradually`, () => {
+      const { log } = through(from, object, verb)
+      let v0 = 0
+      for (let i = 1; i < log.length; i++) {
+        const s = log[i], v = Math.hypot(s.x - log[i - 1].x, s.z - log[i - 1].z) / DT
+        if (!s.standing || !log[i - 1].standing) { v0 = 0; continue }
+        const at = `${s.x.toFixed(2)},${s.z.toFixed(2)} at ${s.t.toFixed(2)} s`
+        // no faster than walking, also while walking with the door
+        expect(v, at).toBeLessThan(WALK_SPEED * 1.02)
+        // no sudden start or stop
+        expect(Math.abs(v - v0), at).toBeLessThan(0.35)
+        v0 = v
       }
     })
   }

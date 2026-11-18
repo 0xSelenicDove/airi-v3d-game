@@ -4,7 +4,8 @@ import { MemoryStream } from './memory'
 import { GESTURE_INFO, emotionOf, gestureOf, type Emotion, type Gesture } from './acting'
 import type { SkillMotion, Step } from './skills'
 import { getUp, lieDown } from './skills/bed'
-import { besideDoor, crossesDoor, doorSpots, handle, inSwing, throughDoor } from './skills/door'
+import { besideDoor, crossesDoor, doorSpots, handle, inSwing, openAt, throughDoor } from './skills/door'
+import { sitDown, standUp } from './skills/seat'
 import { DETOUR_TRIES, DETOUR_WAIT, STUCK_THINK, THINK_BLOCKED, THINK_GIVE_UP, THINK_WAIT, routeAround } from './skills/detour'
 
 type State =
@@ -28,6 +29,12 @@ type State =
 /** walking and swimming speeds in m/s (a relaxed indoor walk) */
 export const WALK_SPEED = 1.2
 export const SWIM_SPEED = 0.6
+/** starting and stopping like a person: m/s gained per second, m/s lost per second, and the slowest arrival */
+const ACCEL = 2.4
+const DECEL = 1.8
+const MIN_PACE = 0.3
+/** steps that carry on walking, so a walk that ends in one does not slow down first */
+const WALKING_STEPS = new Set(['walk', 'squeeze', 'onto'])
 /** closest two standing agents' centres get to each other */
 export const PERSONAL_SPACE = 0.6
 /** how far ahead a walker looks for people in its way */
@@ -56,6 +63,10 @@ export class Agent {
   heading = 0
   /** current walking speed in m/s, for the walk cycle */
   speedNow = 0
+  /** walking backwards (pulling the door along), so the walk cycle runs the other way */
+  walkBack = false
+  /** the speed the walk has built up to: it rises when setting off and falls before stopping */
+  private pace = 0
   /** body movement being played, from `gestureStart` until `gestureUntil` (performance.now ms) */
   gesture: Gesture | SkillMotion | '' = ''
   /** shoes on; they come off before lying down in bed (rule R1) */
@@ -243,6 +254,7 @@ export class Agent {
   tick(realDt: number, gameDt: number) {
     this.world.decayNeeds(this.needs, gameDt)
     const s = this.state
+    if (s.k !== 'moving') this.pace = 0
     switch (s.k) {
       case 'idle':
         this.pose = this.world.inWater(this.pos) ? 'swim' : 'stand' // still in the lake: keep floating
@@ -253,6 +265,7 @@ export class Agent {
         })
         break
       case 'moving': {
+        this.walkBack = false
         const target = s.path[0]
         const d = dist(this.pos, target)
         // in the lake (wading in from the shore, or swimming back out) the agent swims, slower than it walks
@@ -262,15 +275,38 @@ export class Agent {
         const onto = !!s.onto
         const free = swimming || onto ? { dx: 0, dz: 0, scale: 1 } : null
         // an exact leg (beside a bed, through the doorway) keeps to its line: no steering, no grid
-        const full = (swimming ? SWIM_SPEED : WALK_SPEED) * realDt
+        // set off and stop gradually: speed up, and slow down for the end of the walk unless it carries on
+        const top = swimming ? SWIM_SPEED : WALK_SPEED
+        // how far there is still to walk: this path, and the walking steps straight after it
+        let left = d
+        for (let i = 1; i < s.path.length; i++) left += dist(s.path[i - 1], s.path[i])
+        let end = s.path[s.path.length - 1]
+        for (const n of s.next ?? []) {
+          if (!WALKING_STEPS.has(n.do) || !('to' in n)) break
+          left += dist(end, n.to)
+          end = n.to
+        }
+        const brake = Math.max(MIN_PACE, Math.sqrt(2 * DECEL * left))
+        this.pace = Math.min(top, brake, this.pace + ACCEL * realDt)
+        const full = this.pace * realDt
         if (d <= full) {
           this.pos = { ...target }
           this.speedNow = full / Math.max(realDt, 1e-6)
           this.stuck = 0
           s.path.shift()
+          // carry on towards the next point with the rest of this frame's step, so the walk does not stall at
+          // every corner of the path
+          if (s.path.length) this.carryOn(s.path[0], full - d)
           if (!s.path.length && s.next) {
+            const walksOn = !!s.next[0] && WALKING_STEPS.has(s.next[0].do)
             this.speedNow = 0
             this.startRoutine(s.next, s.obj, s.aff)
+            // the next walking step goes on in this frame too
+            const st = this.state
+            if (walksOn && st.k === 'moving' && st.path[0]) {
+              this.carryOn(st.path[0], full - d)
+              this.speedNow = this.pace
+            }
           } else if (!s.path.length) {
             this.pose = s.aff.pose
             this.speedNow = 0
@@ -339,7 +375,7 @@ export class Agent {
             this.startRoutine(getUp(this.world, s.obj), s.obj, s.aff)
           } else if (s.aff.pose === 'sit' && s.obj.approach) {
             // stand up off the seat, stepping forward to where one came from (R0)
-            this.startRoutine([{ do: 'pose', pose: 'stand', at: { ...s.obj.approach }, heading: this.heading, secs: 0.8 }], s.obj, s.aff)
+            this.startRoutine(standUp(this.world, s.obj, this.heading), s.obj, s.aff)
           } else {
             this.release()
             this.state = { k: 'idle' }
@@ -436,15 +472,9 @@ export class Agent {
 
   private walkTo(obj: WorldObject, aff: Affordance) {
     // beds by the bed skill (R1, R2); seats and the water by their approach point, then the last step onto them
-    // seats: walk up in front, turn round, and sit down onto the seat (never walk into it standing, R0)
-    const outward = Math.atan2(obj.pos.x - obj.usePos.x, obj.pos.z - obj.usePos.z)
+    // seats by the seat skill: step up to the seat, turn round, and sit down onto it (never walk into it, R0)
     const steps: Step[] = aff.pose === 'lie' ? lieDown(this.world, obj, aff)
-      : aff.pose === 'sit' && obj.approach ? [
-        { do: 'walk', to: obj.approach },
-        { do: 'face', heading: outward, secs: 0.4 },
-        { do: 'pose', pose: 'sit', at: { ...obj.usePos }, heading: outward, secs: 0.8 },
-        { do: 'use' },
-      ]
+      : aff.pose === 'sit' && obj.approach ? sitDown(this.world, obj)
       : obj.approach ? [{ do: 'walk', to: obj.approach }, { do: 'onto', to: { ...obj.usePos } }, { do: 'use' }]
       : [{ do: 'walk', to: this.spotAt(obj, aff) }, { do: 'use' }]
     this.stuck = 0
@@ -452,6 +482,18 @@ export class Agent {
     // a fresh plan starts without the door: it takes the door again if the way leads through it
     if (this.world.doorUser === this.name) this.world.doorUser = undefined
     this.startRoutine(steps, obj, aff)
+  }
+
+  /** walk up to `r` metres straight towards `to`, unless someone is in the way */
+  private carryOn(to: Vec2, r: number) {
+    const d = dist(this.pos, to)
+    if (d < 1e-6 || r <= 0) return
+    const k = Math.min(r, d) / d
+    const p = { x: this.pos.x + (to.x - this.pos.x) * k, z: this.pos.z + (to.z - this.pos.z) * k }
+    if (!this.crowds(p)) {
+      this.heading = Math.atan2(to.x - this.pos.x, to.z - this.pos.z)
+      this.pos = p
+    }
   }
 
   private startRoutine(steps: Step[], obj: WorldObject, aff: Affordance) {
@@ -556,10 +598,19 @@ export class Agent {
             this.gestureUntil = this.gestureStart + step.secs * 1000
           }
           const k = Math.min(1, s.t / step.secs), e = k * k * (3 - 2 * k)
+          const was = { ...this.pos }
           // the door moves with the hand, slowly (R3)
           if (step.doorTo !== undefined) this.world.doorOpen = s.doorFrom + (step.doorTo - s.doorFrom) * e
           if (step.slide) this.pos = { x: s.from.x + (step.slide.x - s.from.x) * e, z: s.from.z + (step.slide.z - s.from.z) * e }
-          if (step.follow) this.pos = besideDoor(this.world, this.world.doorOpen)
+          if (step.follow && step.doorTo !== undefined) {
+            // walk with the door's edge, starting from where one stands: wait there until the door comes level
+            const at = openAt(this.world, s.from)
+            this.pos = besideDoor(this.world, clamp(this.world.doorOpen, Math.min(at, step.doorTo), Math.max(at, step.doorTo)))
+          }
+          // the legs step with the body as it moves, backwards when the body goes the way it does not face
+          const mx = this.pos.x - was.x, mz = this.pos.z - was.z
+          this.speedNow = s.t > 0 ? Math.hypot(mx, mz) / Math.max(realDt, 1e-6) : 0
+          this.walkBack = mx * Math.sin(this.heading) + mz * Math.cos(this.heading) < 0
           // the hand stays on the handle as the door moves, or both hands go to the feet
           if (step.reach === 'feet') this.reach = 'feet'
           else if (step.reach) {
@@ -570,6 +621,7 @@ export class Agent {
           if (k < 1) return
           if (step.shoes) this.shoesOn = step.shoes === 'on'
           this.reach = null
+          this.speedNow = 0
           break
         }
         case 'think':
