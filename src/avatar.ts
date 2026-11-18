@@ -9,6 +9,7 @@ import { JUMP_AIR, JUMP_CROUCH, WALK_SPEED, type Agent } from './agent'
 import type { Emotion, Gesture } from './acting'
 import type { SkillMotion } from './skills'
 import type { Physics } from './physics'
+import { Drift, FidgetPicker, hash, seeded, styleFor, type MotionStyle } from './motion-style'
 
 /**
  * Visual body for an agent. Starts as a capsule, becomes a VRM once one loads.
@@ -74,8 +75,15 @@ export class Avatar {
   private sayEl = document.createElement('div')
   private thinkEl = document.createElement('div')
   private shown = { say: '', think: '' }
+  /** this person's way of walking and standing, and its slow drift over time (motion-style.ts) */
+  private readonly style: MotionStyle
+  private readonly drift: { stride: Drift; arms: Drift; pace: Drift; lean: Drift; sway: Drift; head: Drift }
+  private readonly fidgets = new FidgetPicker()
 
-  constructor(color: number) {
+  constructor(color: number, name = '') {
+    this.style = styleFor(name)
+    const rnd = seeded(hash(name) ^ 0x9E3779B9), r = this.style.drift
+    this.drift = { stride: new Drift(rnd, r), arms: new Drift(rnd, r), pace: new Drift(rnd, r * 0.7), lean: new Drift(rnd, r * 0.5), sway: new Drift(rnd, r * 0.8), head: new Drift(rnd, r * 1.3) }
     this.capsule = new THREE.Mesh(
       new THREE.CapsuleGeometry(0.3, 0.9, 6, 12),
       new THREE.MeshStandardMaterial({ color }),
@@ -263,8 +271,11 @@ export class Avatar {
 
     const k = 1 - Math.exp(-dt * 12)        // pose blend rate
     const kSlow = 1 - Math.exp(-dt * 6)
-    // about 0.9 strides per second at walking speed, slower when the agent slows down
-    if (moving) this.walkP += dt * 5.8 * Math.min(1.2, stride / WALK_SPEED) * (agent.walkBack ? -1 : 1)
+    // about 0.9 strides per second at walking speed (this person's own pace, drifting a little), slower when the
+    // agent slows down
+    const ms = this.style, dr = this.drift
+    const cadence = ms.cadence * (1 + 0.05 * dr.pace.at(t))
+    if (moving) this.walkP += dt * cadence * Math.min(1.2, stride / WALK_SPEED) * (agent.walkBack ? -1 : 1)
     const p = this.walkP, s = Math.sin(p), c = Math.cos(p)
     const breath = Math.sin(t * 1.7)
     const P = (n: BoneName, x = 0, y = 0, z = 0, rate = k) => this.pose(n, rate, x, y, z)
@@ -281,8 +292,10 @@ export class Avatar {
       // short legs on a high seat: the feet point down until the toes rest on the floor (footPoint)
       P('leftFoot', 0.1 + this.footPoint); P('rightFoot', 0.1 + this.footPoint)
     } else if (moving) {
-      P('leftUpperLeg', s * 0.6); P('rightUpperLeg', -s * 0.6)
-      P('leftLowerLeg', Math.max(0, -c) * 0.95); P('rightLowerLeg', Math.max(0, c) * 0.95)
+      // this person's stride, a little longer or shorter from moment to moment
+      const st = ms.stride * (1 + 0.12 * dr.stride.at(t)), kn = ms.knee * (1 + 0.1 * dr.stride.at(t + 7))
+      P('leftUpperLeg', s * st); P('rightUpperLeg', -s * st)
+      P('leftLowerLeg', Math.max(0, -c) * kn); P('rightLowerLeg', Math.max(0, c) * kn)
       P('leftFoot', -s * 0.25); P('rightFoot', s * 0.25)
     } else {
       P('leftUpperLeg', 0, 0, -0.03); P('rightUpperLeg', 0, 0, 0.03)
@@ -292,11 +305,14 @@ export class Avatar {
     // ---- torso, arms, by activity ----
     let headX = 0, headY = 0
     if (moving) {
-      P('hips', 0, -s * 0.1, c * 0.04)
-      P('spine', 0.06, s * 0.1); P('chest', 0, s * 0.08); P('neck')
-      P('leftUpperArm', -s * 0.5, 0, -1.3); P('rightUpperArm', s * 0.5, 0, 1.3)
-      P('leftLowerArm', 0, -0.45 - Math.max(0, -s) * 0.3); P('rightLowerArm', 0, 0.45 + Math.max(0, s) * 0.3)
+      // this person's posture and arm swing, drifting a little so no two strides look the same
+      const arm = ms.armSwing * (1 + 0.18 * dr.arms.at(t)), lean = ms.lean * (1 + 0.3 * dr.lean.at(t))
+      P('hips', 0, -s * ms.twist, c * ms.hipDrop)
+      P('spine', lean, s * ms.twist); P('chest', 0, s * ms.twist * 0.8); P('neck', -lean * 0.5)
+      P('leftUpperArm', -s * arm, 0, -ms.armOut); P('rightUpperArm', s * arm, 0, ms.armOut)
+      P('leftLowerArm', 0, -ms.elbow - Math.max(0, -s) * 0.3); P('rightLowerArm', 0, ms.elbow + Math.max(0, s) * 0.3)
       P('leftHand'); P('rightHand')
+      headY = dr.head.at(t) * 0.12
     } else if (verb === 'use_computer') {
       const typeL = Math.sin(t * 17) * 0.06, typeR = Math.sin(t * 17 + 1.7) * 0.06
       P('hips'); P('spine', 0.12); P('chest', 0.05); P('neck', 0.08)
@@ -341,13 +357,22 @@ export class Avatar {
         P('rightHand', 0, 0, Math.sin(t * 6.3 + 1) * 0.2)
       }
     } else {
-      // standing idle: breathing + slow weight shift
-      P('hips', 0, 0, Math.sin(t * 0.5) * 0.015)
-      P('spine', 0.015 * breath); P('chest', 0.02 * breath); P('neck')
-      P('leftUpperArm', 0.02 * breath, 0, -1.3 + 0.015 * breath); P('rightUpperArm', 0.02 * breath, 0, 1.3 - 0.015 * breath)
+      // standing idle: breathing, this person's slow weight shift, and now and then a small idle movement
+      const fid = !speaking && !(agent.gesture && now < agent.gestureUntil) ? this.fidgets.update(t) : (this.fidgets.reset(t), null)
+      // fidgets ease in and out
+      const env = fid ? Math.min(1, fid.u / 0.25, (1 - fid.u) / 0.25) : 0, ease = env * env * (3 - 2 * env)
+      const shift = fid?.kind === 'shift' ? fid.side * ease : 0
+      const roll = fid?.kind === 'roll_shoulders' ? Math.sin(fid.u * Math.PI * 2) * ease : 0
+      P('hips', 0, 0, dr.sway.at(t) * ms.idleSway + shift * 0.05)
+      P('spine', 0.015 * breath, 0, -shift * 0.03); P('chest', 0.02 * breath + roll * 0.04)
+      P('neck', 0, 0, fid?.kind === 'stretch_neck' ? fid.side * Math.sin(fid.u * Math.PI) * 0.3 : 0)
+      // the relaxed leg bends a little while the weight is on the other one
+      if (shift) P(shift > 0 ? 'rightLowerLeg' : 'leftLowerLeg', Math.abs(shift) * 0.18)
+      P('leftUpperArm', 0.02 * breath, 0, -1.3 + 0.015 * breath - roll * 0.1); P('rightUpperArm', 0.02 * breath, 0, 1.3 - 0.015 * breath + roll * 0.1)
       P('leftLowerArm', 0, -0.2); P('rightLowerArm', 0, 0.2)
       P('leftHand'); P('rightHand')
-      headY = Math.sin(t * 0.4) * 0.05
+      headY = dr.head.at(t) * 0.08 + (fid?.kind === 'look' ? fid.side * 0.6 * ease : 0)
+      headX = fid?.kind === 'glance_down' ? 0.35 * ease : fid?.kind === 'look' ? -0.05 * ease : 0
       if (speaking) {
         // talk with the right hand
         P('rightUpperArm', -0.7 + Math.sin(t * 4.5) * 0.15, 0, 1.0)
@@ -417,7 +442,7 @@ export class Avatar {
     this.crouchDrop += (this.legDrop(crouch) - this.crouchDrop) * (1 - Math.exp(-dt * 20))
     this.inner.position.set(0, this.cur.y - this.crouchDrop, this.cur.z)
     const hips = this.bone('hips')
-    if (hips) hips.position.y = this.hipsY + (moving ? Math.abs(c) * 0.03 : Math.sin(t * 1.7) * 0.003)
+    if (hips) hips.position.y = this.hipsY + (moving ? Math.abs(c) * ms.bounce : Math.sin(t * 1.7) * 0.003)
 
     // book prop in the hands while reading
     this.book.visible = verb === 'read'

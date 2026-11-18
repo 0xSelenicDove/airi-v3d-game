@@ -248,7 +248,7 @@ new GLTFLoader().load(`${import.meta.env.BASE_URL}models/outdoor.glb`, gltf => {
 
 // avatars: capsule until a VRM loads
 const avatars = agents.map(a => {
-  const av = new Avatar(a.persona.color)
+  const av = new Avatar(a.persona.color, a.persona.name)
   scene.add(av.root)
   av.setName(a.name, a.persona.color)
   return av
