@@ -40,8 +40,8 @@ describe('R1, R2: going to bed and getting up', () => {
     const a = new Agent(persona('Airi', 'bed'), { x: 0, z: 0 }, brain, w)
     const bed = w.find('bed')!
     const r = bedRect(w, bed)
-    const seen: { pose: string; pos: Vec2; shoes: boolean }[] = []
-    const record = () => seen.push({ pose: a.pose, pos: { ...a.pos }, shoes: a.shoesOn })
+    const seen: { pose: string; pos: Vec2; shoes: boolean; feet: boolean }[] = []
+    const record = () => seen.push({ pose: a.pose, pos: { ...a.pos }, shoes: a.shoesOn, feet: a.reach === 'feet' })
     send(a, 'bed', 'sleep')
     run([a], () => a.state.k === 'doing', record)
     expect(a.state.k).toBe('doing')
@@ -51,6 +51,7 @@ describe('R1, R2: going to bed and getting up', () => {
     expect(firstSit).toBeGreaterThan(-1)
     expect(firstSit).toBeLessThan(firstLie)                       // sits down before lying down (R2)
     expect(seen[firstLie].shoes).toBe(false)                      // shoes off before lying down (R1)
+    expect(seen.slice(firstSit, firstLie).some(s => s.feet)).toBe(true) // with the hands on the feet
     expect(seen.slice(0, firstSit).every(s => s.shoes)).toBe(true)
     // it sat down on the edge of the bed, not in its middle
     const sitAt = seen[firstLie - 1].pos
@@ -81,12 +82,13 @@ describe('R3: the door', () => {
     const w = new World()
     w.minutes = 12 * 60
     const a = new Agent(persona('Airi', 'bed'), from, brain, w)
-    const log: { t: number; x: number; z: number; open: number; gesture: string; heading: number }[] = []
+    const log: { t: number; x: number; z: number; open: number; gesture: string; heading: number; reach: number | null }[] = []
     let t = 0
     send(a, object, verb)
     run([a], () => a.state.k === 'doing', () => {
       t += DT
-      log.push({ t, x: a.pos.x, z: a.pos.z, open: w.doorOpen, gesture: a.gesture, heading: a.heading })
+      const r = a.reach && a.reach !== 'feet' ? Math.hypot(a.reach.x - a.pos.x, a.reach.z - a.pos.z) : null
+      log.push({ t, x: a.pos.x, z: a.pos.z, open: w.doorOpen, gesture: a.gesture, heading: a.heading, reach: r })
     })
     return { w, a, log }
   }
@@ -101,9 +103,18 @@ describe('R3: the door', () => {
       const crossed = log.findIndex((s, i) => i > 0 && (log[i - 1].x < w.door.x) !== (s.x < w.door.x))
       expect(crossed).toBeGreaterThan(0)
       // through the doorway only while the door is open (R0, R3)
-      for (const s of log.filter(s => Math.abs(s.x - w.door.x) < 0.3)) expect(s.open, `at ${s.x.toFixed(2)}`).toBeGreaterThan(0.97)
-      // the hand went to the handle before the door moved
+      // the doorway: from the wall's inner face out to just past the leaf's plane
+      for (const s of log.filter(s => s.x > w.door.x && s.x < w.door.x + 0.35 && Math.abs(s.z - w.door.z) < 0.45)) {
+        expect(s.open, `at ${s.x.toFixed(2)},${s.z.toFixed(2)}`).toBeGreaterThan(0.97)
+      }
+      // the hand went to the handle before the door moved, and the handle was within arm's reach whenever the hand
+      // was on it while the door moved by hand
       const moved = log.findIndex(s => s.open > 0.01)
+      expect(log.slice(0, moved).some(s => s.reach !== null)).toBe(true)
+      const handled = log.filter(s => s.reach !== null)
+      expect(handled.length).toBeGreaterThan(0)
+      // a small VRoid avatar reaches about 0.48 m from the shoulder, which sits about 0.17 m to the side
+      for (const s of handled) expect(s.reach!).toBeLessThan(0.52)
       expect(log.slice(0, moved).some(s => s.gesture === 'reach_handle')).toBe(true)
       // opened slowly
       const opened = log.findIndex(s => s.open > 0.97)
@@ -213,6 +224,36 @@ describe('R0, R2 in the tent: the camp cots', () => {
       expect(inside(other, s.pos)).toBe(false)
     }
   })
+})
+
+describe('R0 on seats', () => {
+  for (const id of ['sofa_seat_1', 'desk', 'dining_seat_1', 'armchair']) {
+    it(`${id}: sits down from in front of the seat and stands up off it, never standing inside it`, () => {
+      const w = new World()
+      w.minutes = 12 * 60
+      const a = new Agent(persona('Airi', 'bed'), { x: 0, z: 0.2 }, brain, w)
+      const seat = w.find(id)!
+      const under = w.obstacles.find(f => Math.abs(seat.usePos.x - f.cx) <= f.w / 2 + 0.3 && Math.abs(seat.usePos.z - f.cz) <= f.d / 2 + 0.3)
+      const standingAt: Vec2[] = []
+      // standing still or walking (not the moment of sitting down or standing up, when the body blends between)
+      const record = () => {
+        const s = a.state
+        if (a.pose === 'stand' && !(s.k === 'routine' && s.steps[0]?.do === 'pose')) standingAt.push({ ...a.pos })
+      }
+      send(a, id, seat.affordances[0].verb)
+      run([a], () => a.state.k === 'doing', record)
+      expect(a.state.k).toBe('doing')
+      expect(a.pose).toBe('sit')
+      if (a.state.k === 'doing') a.state.left = 0.1
+      run([a], () => a.state.k === 'waiting' || a.state.k === 'thinking', record)
+      expect(a.pose).toBe('stand')
+      // standing, always clear of the seat (a body's half width from its usePos at least) and of the furniture
+      for (const p of standingAt) {
+        expect(dist(p, seat.usePos), `${p.x.toFixed(2)},${p.z.toFixed(2)}`).toBeGreaterThan(0.25)
+        if (under) expect(inside(under, p)).toBe(false)
+      }
+    })
+  }
 })
 
 describe('R0 at the door', () => {

@@ -21,7 +21,7 @@ const ALONG = 0.55
 /** a body is about 0.4 m wide: the squeeze needs at least this clearance from furniture on its centre line */
 export const BODY_CLEARANCE = 0.2
 /** size of a bed without its own footprint (the camp cots: measured in public/models/outdoor.glb) */
-const COT = { w: 2.2, d: 0.72 }
+const COT = { w: 2.0, d: 0.84 }
 
 export type Rect = Footprint
 
@@ -130,7 +130,7 @@ export function lieDown(world: World, obj: WorldObject, _aff: Affordance): Step[
     ...rest.map((to): Step => ({ do: 'squeeze', to })),
     { do: 'face', heading: b.out, secs: 0.4 },
     { do: 'pose', pose: 'sit', at: b.sit, heading: b.out, secs: 0.8 },
-    { do: 'act', motion: 'shoes', secs: 1.6, shoes: 'off' },
+    { do: 'act', motion: 'shoes', secs: 3.2, shoes: 'off', reach: 'feet' },
     { do: 'pose', pose: 'lie', at: obj.usePos, heading: LIE_HEADING, secs: 1.2 },
     { do: 'use' },
   ]
@@ -142,7 +142,7 @@ export function getUp(world: World, obj: WorldObject): Step[] {
   const back = [...b.way].reverse().slice(1)
   return [
     { do: 'pose', pose: 'sit', at: b.sit, heading: b.out, secs: 1.0 },
-    { do: 'act', motion: 'shoes', secs: 1.6, shoes: 'on' },
+    { do: 'act', motion: 'shoes', secs: 3.2, shoes: 'on', reach: 'feet' },
     { do: 'pose', pose: 'stand', at: b.stand, heading: b.out, secs: 0.8 },
     ...back.map((to): Step => ({ do: 'squeeze', to })),
   ]

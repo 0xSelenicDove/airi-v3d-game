@@ -18,12 +18,16 @@ export type Step =
   | { do: 'squeeze'; to: Vec2 }
   /** the last step onto a seat, or into the water, as the activity needs */
   | { do: 'onto'; to: Vec2 }
-  /** turn to a heading (radians, 0 = +z) */
-  | { do: 'face'; heading: number; secs: number }
+  /** turn to a heading (radians, 0 = +z), or to the door handle on one face of the leaf */
+  | { do: 'face'; heading: number; secs: number; toHandle?: 'in' | 'out' }
   /** change pose while moving the body to `at` over `secs` (sitting down on a bed edge, lying down, getting up) */
   | { do: 'pose'; pose: Pose; at: Vec2; heading: number; secs: number }
-  /** play a body movement; it can move the door or take the shoes off or on as it ends */
-  | { do: 'act'; motion: SkillMotion; secs: number; door?: 'open' | 'close'; shoes?: 'off' | 'on' }
+  /**
+   * play a body movement over `secs`. It can move the door to `doorTo` (0 shut .. 1 open), keep a hand on the
+   * handle (`reach` 'in' or 'out', the face of the leaf) or both hands on the feet ('feet'), slide the body to
+   * `slide`, walk with the door's edge (`follow`), and take the shoes off or put them on as it ends
+   */
+  | { do: 'act'; motion: SkillMotion; secs: number; doorTo?: number; reach?: 'in' | 'out' | 'feet'; slide?: Vec2; follow?: boolean; shoes?: 'off' | 'on' }
   /** stop and think, with the thought shown above the head */
   | { do: 'think'; text: string; secs: number }
   /** take the door (wait if someone else has it) or let it go */

@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import {
-  VRM, VRMLoaderPlugin, VRMUtils, VRMSpringBoneCollider, VRMSpringBoneColliderShapeCapsule, VRMSpringBoneColliderShapePlane,
+  VRM, VRMLoaderPlugin, VRMUtils, VRMSpringBoneCollider, VRMSpringBoneColliderShapeCapsule, VRMSpringBoneColliderShapePlane, VRMSpringBoneColliderShapeSphere,
   type VRMSpringBoneColliderGroup,
 } from '@pixiv/three-vrm'
 import { JUMP_AIR, JUMP_CROUCH, WALK_SPEED, type Agent } from './agent'
@@ -29,6 +29,20 @@ export class Avatar {
   /** VRM 0.x rigs face -Z, so bone-local X and Z rotations are mirrored compared with VRM 1.0 */
   private v0 = false
   private hipsY = 0.9
+  /** how far the hip joints are below the hips bone, and how thick the thigh is (its radius), from the model */
+  private legBelowHips = 0.06
+  private thighR = 0.07
+  /** the toes' height standing, and how far the feet point down when seated (feetOnFloor) */
+  private toeY = 0.02
+  private footPoint = 0
+  /** how far the back (and the back of the head) is behind the spine's line, from the model (lying down) */
+  private backDepth = 0.12
+  /** top of the bed under a lying avatar, from a physics ray (lieHeight) */
+  private bedTop = 0.5
+  /** blend weight of the hands resting on the thighs or the table while sitting idle */
+  private restW = 0
+  /** top of the seat under a sitting avatar, from a physics ray (sitHeight) */
+  private seatTop = 0.46
   private walkP = 0
   /** how far the current gesture has blended in, 0..1, and which one it is (kept while it fades out) */
   private gestureW = 0
@@ -150,22 +164,40 @@ export class Avatar {
     this.bedCollider = slab
     this.bedGroup = { colliders: [slab], name: 'bed' }
     this.bedOn = false
-    // furniture and walls near the hair and clothes: planes placed each moment where rays from the head and the
-    // hips hit something solid (see probeSurroundings). They start parked far below, where they push nothing.
+    // hair and cloth hang down and settle: many VRoid models ship springs with no gravity and no drag, so the hair
+    // floats and keeps swinging. Give every joint at least a little of both (the model's own values when higher).
+    for (const j of vrm.springBoneManager?.joints ?? []) {
+      const st = j.settings
+      if (st.gravityDir.lengthSq() < 1e-6) st.gravityDir.set(0, -1, 0)
+      st.gravityPower = Math.max(st.gravityPower, MIN_GRAVITY)
+      st.dragForce = Math.max(st.dragForce, MIN_DRAG)
+    }
+    // furniture and walls near the hair and clothes: big spheres touching the surfaces that rays from the head and
+    // the hips hit (see probeSurroundings), so they push only near that surface; plus the floor. Unused spheres
+    // are parked far below.
     this.surfaces = SURFACE_DIRS.map(() => {
-      const shape = new VRMSpringBoneColliderShapePlane({ offset: new THREE.Vector3(0, PARKED, 0), normal: new THREE.Vector3(0, 1, 0) })
+      const shape = new VRMSpringBoneColliderShapeSphere({ offset: new THREE.Vector3(0, PARKED, 0), radius: 0.01 })
       const collider = new VRMSpringBoneCollider(shape)
       this.root.add(collider)
       return { collider, shape }
     })
-    const surfaceGroup: VRMSpringBoneColliderGroup = { colliders: this.surfaces.map(x => x.collider), name: 'surroundings' }
+    this.floorShape = new VRMSpringBoneColliderShapePlane({ offset: new THREE.Vector3(0, 0, 0), normal: new THREE.Vector3(0, 1, 0) })
+    const floor = new VRMSpringBoneCollider(this.floorShape)
+    this.root.add(floor)
+    const surfaceGroup: VRMSpringBoneColliderGroup = { colliders: [...this.surfaces.map(x => x.collider), floor], name: 'surroundings' }
     for (const j of vrm.springBoneManager?.joints ?? []) j.colliderGroups.push(surfaceGroup)
 
     const hips = vrm.humanoid.getNormalizedBoneNode('hips')
     if (hips) {
       vrm.scene.updateMatrixWorld(true)
       this.hipsY = hips.getWorldPosition(new THREE.Vector3()).y
+      const leg = vrm.humanoid.getNormalizedBoneNode('leftUpperLeg')
+      if (leg) this.legBelowHips = this.hipsY - leg.getWorldPosition(new THREE.Vector3()).y
     }
+    this.thighR = thighRadius(vrm)
+    this.backDepth = backDepth(vrm)
+    const toes = vrm.humanoid.getNormalizedBoneNode('leftToes')
+    if (toes) this.toeY = toes.getWorldPosition(new THREE.Vector3()).y
     const head = this.bone('head')
     if (head) this.headTop = head.getWorldPosition(new THREE.Vector3()).y + 0.3
   }
@@ -236,7 +268,8 @@ export class Avatar {
     } else if (sit) {
       P('leftUpperLeg', -Math.PI / 2, 0.1, -0.05); P('rightUpperLeg', -Math.PI / 2, -0.1, 0.05)
       P('leftLowerLeg', Math.PI / 2 - 0.1); P('rightLowerLeg', Math.PI / 2 - 0.1)
-      P('leftFoot', 0.1); P('rightFoot', 0.1)
+      // short legs on a high seat: the feet point down until the toes rest on the floor (footPoint)
+      P('leftFoot', 0.1 + this.footPoint); P('rightFoot', 0.1 + this.footPoint)
     } else if (moving) {
       P('leftUpperLeg', s * 0.6); P('rightUpperLeg', -s * 0.6)
       P('leftLowerLeg', Math.max(0, -c) * 0.95); P('rightLowerLeg', Math.max(0, c) * 0.95)
@@ -278,7 +311,9 @@ export class Avatar {
       headX = -0.9
       headY = Math.sin(sw * 0.5) * 0.15
     } else if (lie) {
-      P('hips'); P('spine', 0.02 * breath); P('chest', 0.03 * breath); P('neck')
+      // breathing bends the back only forward (up, lying on it), never back into the mattress
+      const lift = (1 + breath) / 2
+      P('hips'); P('spine', 0.02 * lift); P('chest', 0.03 * lift); P('neck')
       P('leftUpperArm', 0, 0, -1.4); P('rightUpperArm', 0, 0, 1.4)
       P('leftLowerArm', 0, -0.25); P('rightLowerArm', 0, 0.25)
       P('leftHand'); P('rightHand')
@@ -320,6 +355,16 @@ export class Avatar {
     const gu = Math.min(1, Math.max(0, (now - agent.gestureStart) / Math.max(1, agent.gestureUntil - agent.gestureStart)))
     let crouch = 0
     if (gw && this.gestureNow) crouch = this.bodyGesture(this.gestureNow, gu, gElapsed, t, gw, P, sit)
+    // ---- hands on things (agent.reach: a door handle, or the feet): two-bone IK on the arms ----
+    const reachTo = agent.reach
+    if (reachTo) this.reachAt = reachTo === 'feet' ? 'feet' : new THREE.Vector3(reachTo.x, reachTo.y, reachTo.z)
+    this.reachW += ((reachTo ? 1 : 0) - this.reachW) * (1 - Math.exp(-dt * 10))
+    if (this.reachW > 0.01 && this.reachAt) this.reachHands(this.reachAt, this.reachW, dt)
+    else this.footAt = null
+    // sitting idle (not typing or reading, not acting, not talking with the hands): hands rest on something
+    const resting = sit && !playing && !reachTo && !speaking && verb !== 'use_computer' && verb !== 'read'
+    this.restW += ((resting ? 1 : 0) - this.restW) * (1 - Math.exp(-dt * 6))
+    if (this.restW > 0.01) this.restHands(agent, verb, physics, this.restW)
     // fingers: relaxed curl
     for (const side of ['left', 'right'] as const) {
       const sign = side === 'left' ? -1 : 1
@@ -348,7 +393,9 @@ export class Avatar {
     // ---- body placement (blended so sitting down / lying down is not a snap) ----
     // swimming: face down (the opposite pitch), half sunk into the water, which is 0.12 m below the floor
     const tgtPitch = lie ? -Math.PI / 2 : swim ? Math.PI / 2 : 0
-    const tgtY = lie ? 0.62 : swim ? -0.08 + Math.sin(t * 2) * 0.02 : sit ? -(this.hipsY - 0.55) : 0
+    // sitting: the hips go as high as this model's thighs need to rest on top of the seat, not sink into it (R0)
+    // lying: the back rests on the mattress, not in it, however deep this model's back is (R0)
+    const tgtY = lie ? this.lieHeight(agent, physics) : swim ? -0.08 + Math.sin(t * 2) * 0.02 : sit ? this.sitHeight(agent, physics) - this.hipsY : 0
     // lying pivots about the feet, so slide the body along its length to centre the hips on the bed
     const tgtZ = lie ? this.hipsY * 0.95 : swim ? -this.hipsY * 0.95 : sit ? -0.12 : 0
     const kp = 1 - Math.exp(-dt * 7)
@@ -389,6 +436,7 @@ export class Avatar {
     this.setBedCollision(lie)
     this.showShoes(agent.shoesOn)
     this.probeSurroundings(dt, agent, physics)
+    this.feetOnFloor(dt, sit)
     this.vrm.update(dt)
   }
 
@@ -455,10 +503,19 @@ export class Avatar {
       case 'pull_door':                     // hand on the handle, the elbow bending as the door comes
         P('spine', -0.04, 0, 0, w)
         arm(1, [0.1, 1.35, 0.45], [0, 0.2 + 0.9 * u, 0]); return 0
-      case 'shoes':                         // seated, bent forward, both hands down at the feet
-        P('spine', 0.5, 0, 0, w); P('chest', 0.3, 0, 0, w)
+      case 'shoes': {                       // seated: lift one foot, then the other, and bend down to it
+        const first = u < 0.5, f = first ? u * 2 : (u - 0.5) * 2
+        const lift = Math.min(1, f / 0.25, (1 - f) / 0.25)
+        this.shoesFoot = first ? 'right' : 'left'
+        const n = this.shoesFoot
+        const side = n === 'right' ? 1 : -1
+        P(`${n}UpperLeg` as BoneName, -Math.PI / 2 - SHOE_LIFT.thigh * lift, SHOE_LIFT.twist * lift * side, SHOE_LIFT.out * lift * side, w)
+        P(`${n}LowerLeg` as BoneName, Math.PI / 2 - 0.1 + SHOE_LIFT.knee * lift, 0, 0, w)
+        P(`${n}Foot` as BoneName, 0.3 * lift, 0, 0, w)
+        P('spine', SHOE_LIFT.spine, 0, 0, w); P('chest', SHOE_LIFT.chest, 0, 0, w)
         arm(1, [-0.9, 0, 1.15], [0, 0.3, 0]); arm(-1, [-0.9, 0, 1.15], [0, 0.3, 0])
         return 0
+      }
       case 'jump': {
         if (sit) return 0
         // crouch, fly (legs tucked a little, arms up), land and straighten
@@ -504,6 +561,165 @@ export class Avatar {
     return leg * (1 - Math.cos(a)) + leg * (1 - Math.cos(a - b))
   }
 
+  /**
+   * Seated, the thighs lie on the seat; if the legs are too short for the soles to reach the floor, the feet point
+   * down until the toes rest on it (from how high the toes are above the floor), as short people sit.
+   */
+  private feetOnFloor(dt: number, sit: boolean) {
+    if (!sit) { this.footPoint += (0 - this.footPoint) * Math.min(1, dt * 8); return }
+    const l = this.bone('leftToes') ?? this.bone('leftFoot'), r = this.bone('rightToes') ?? this.bone('rightFoot')
+    if (!l || !r || this.gestureW > 0.5) return
+    // the toe joint stops a little above its standing height: pointed down, the tips reach lower than the joint
+    const above = Math.min(l.getWorldPosition(new THREE.Vector3()).y, r.getWorldPosition(new THREE.Vector3()).y) - this.toeY - 0.025
+    this.footPoint = Math.max(0, Math.min(0.9, this.footPoint + above * dt * 25))
+  }
+
+  /** the body's height lying on whatever is under the avatar: the bed's top plus this model's back */
+  private lieHeight(agent: Agent, physics?: Physics) {
+    // under the hips and under the head (a pillow is higher than the mattress), whichever is higher
+    const head = this.bone('head')?.getWorldPosition(new THREE.Vector3())
+    const under = [agent.pos, ...(head ? [{ x: head.x, z: head.z }] : [])]
+      .map(p => physics?.hit({ x: p.x, y: 1.3, z: p.z }, { x: 0, y: -1, z: 0 }, 1.3, agent.name)?.point.y)
+      .filter((y): y is number => y !== undefined && y > 0.2 && y < 0.9)
+    if (under.length) this.bedTop = Math.max(...under)
+    return this.bedTop + this.backDepth + 0.01
+  }
+
+  /**
+   * Sitting idle, the hands rest somewhere real: on the table in front while eating, if there is one within reach,
+   * otherwise on the thighs. Placed by IK, so they lie on top of things whatever the model's proportions (R0).
+   */
+  private restHands(agent: Agent, verb: string, physics: Physics | undefined, w: number) {
+    if (!this.vrm) return
+    this.root.updateMatrixWorld(true)
+    const rq = this.root.getWorldQuaternion(new THREE.Quaternion())
+    const left = new THREE.Vector3(1, 0, 0).applyQuaternion(rq), fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(rq)
+    const down = new THREE.Vector3(0, -1, 0)
+    const hips = this.bone('hips')?.getWorldPosition(new THREE.Vector3())
+    if (!hips) return
+    if (verb === 'eat' && physics) {
+      const ahead = hips.clone().addScaledVector(fwd, 0.38)
+      const top = physics.hit({ x: ahead.x, y: hips.y + 0.6, z: ahead.z }, { x: 0, y: -1, z: 0 }, 0.6, agent.name)
+      if (top && top.point.y > hips.y + 0.05 && top.point.y < hips.y + 0.45) {
+        for (const side of ['left', 'right'] as const) {
+          const s = side === 'left' ? 1 : -1
+          const at = ahead.clone().setY(top.point.y + 0.065).addScaledVector(left, s * 0.14)
+          // elbows out to the sides, not down through the table's edge; the hands lie flat on it
+          this.ik(side, at, left.clone().multiplyScalar(s).add(new THREE.Vector3(0, 0.3, 0)), w)
+          this.levelHand(side, w)
+        }
+        return
+      }
+    }
+    for (const side of ['left', 'right'] as const) {
+      const up = this.bone(`${side}UpperLeg` as BoneName), knee = this.bone(`${side}LowerLeg` as BoneName)
+      if (!up || !knee) continue
+      const s = side === 'left' ? 1 : -1
+      const at = up.getWorldPosition(new THREE.Vector3()).lerp(knee.getWorldPosition(new THREE.Vector3()), 0.6)
+        .add(new THREE.Vector3(0, this.thighR + 0.035, 0)).addScaledVector(left, s * 0.03)
+      this.ik(side, at, left.clone().multiplyScalar(s).add(down).addScaledVector(fwd, -0.3), w)
+      this.levelHand(side, w)
+    }
+  }
+
+  /** turn the hand so the fingers point level, not down into what it rests on */
+  private levelHand(side: 'left' | 'right', w: number) {
+    const h = this.vrm!.humanoid
+    const hand = h.getNormalizedBoneNode(`${side}Hand`), finger = h.getNormalizedBoneNode(`${side}MiddleProximal`)
+    if (!hand || !finger || !hand.parent) return
+    hand.updateWorldMatrix(true, false)
+    const hq = hand.getWorldQuaternion(new THREE.Quaternion())
+    const dir = finger.position.clone().normalize().applyQuaternion(hq)
+    const level = dir.clone().setY(0)
+    if (level.lengthSq() < 1e-4) return
+    const wq = new THREE.Quaternion().setFromUnitVectors(dir, level.normalize()).multiply(hq)
+    const pq = hand.parent.getWorldQuaternion(new THREE.Quaternion())
+    hand.quaternion.slerp(pq.invert().multiply(wq), w)
+    hand.updateWorldMatrix(false, true)
+  }
+
+  /** the hips' height for sitting on whatever is under the avatar: the seat's top plus this model's thigh */
+  private sitHeight(agent: Agent, physics?: Physics) {
+    const hit = physics?.hit({ x: agent.pos.x, y: 1.3, z: agent.pos.z }, { x: 0, y: -1, z: 0 }, 1.3, agent.name)
+    if (hit && hit.point.y > 0.2) this.seatTop = hit.point.y
+    return Math.max(0.5, this.seatTop + this.thighR + 0.01 + this.legBelowHips)
+  }
+
+  /** where the hands are reaching (kept while the reach fades out), its blend weight, and which foot */
+  private reachAt: THREE.Vector3 | 'feet' | null = null
+  private reachW = 0
+  private shoesFoot: 'left' | 'right' = 'right'
+  /** where the hands are on the feet, following the foot being worked on */
+  private footAt: THREE.Vector3 | null = null
+
+  /**
+   * Put a hand on `at` (the hand on that side of the body), or both hands on the foot being worked on. The arm
+   * poses above stay as a fallback; the IK result blends over them with weight `w`.
+   */
+  private reachHands(at: THREE.Vector3 | 'feet', w: number, dt: number) {
+    if (!this.vrm) return
+    this.root.updateMatrixWorld(true)
+    const rq = this.root.getWorldQuaternion(new THREE.Quaternion())
+    // the avatar's own axes in the world: x to its left, z forward
+    const left = new THREE.Vector3(1, 0, 0).applyQuaternion(rq), down = new THREE.Vector3(0, -1, 0)
+    if (at === 'feet') {
+      const foot = this.bone(`${this.shoesFoot}Foot` as BoneName)
+      if (!foot) return
+      // the hands move over to the other foot, rather than jump to it
+      const f = foot.getWorldPosition(new THREE.Vector3())
+      this.footAt = this.footAt ? this.footAt.lerp(f, 1 - Math.exp(-dt * 10)) : f
+      f.copy(this.footAt)
+      // one hand each side of the foot, elbows out to the sides and forward, clear of the seat's edge
+      const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(rq)
+      this.ik('right', f.clone().addScaledVector(left, -0.06).add(new THREE.Vector3(0, 0.05, 0)), left.clone().negate().addScaledVector(fwd, 0.5), w)
+      this.ik('left', f.clone().addScaledVector(left, 0.06).add(new THREE.Vector3(0, 0.05, 0)), left.clone().addScaledVector(fwd, 0.5), w)
+      return
+    }
+    const local = this.root.worldToLocal(at.clone())
+    const side = local.x < 0 ? 'right' : 'left'
+    const out = side === 'right' ? left.clone().negate() : left.clone()
+    const back = new THREE.Vector3(0, 0, -1).applyQuaternion(rq)
+    // the palm, not the wrist, goes on the handle: aim the wrist a hand's length short of it
+    const shoulder = this.bone(`${side}UpperArm` as BoneName)?.getWorldPosition(new THREE.Vector3())
+    const wrist = shoulder ? at.clone().addScaledVector(at.clone().sub(shoulder).normalize(), -HAND_LEN) : at
+    this.ik(side, wrist, out.multiplyScalar(0.5).add(down).addScaledVector(back, 0.3), w)
+  }
+
+  /**
+   * Two-bone IK on one arm (normalised bones, whose rest pose has no rotation): the wrist goes to `target`, as far
+   * as the arm reaches, with the elbow bent towards `pole`.
+   */
+  private ik(side: 'left' | 'right', target: THREE.Vector3, pole: THREE.Vector3, w: number) {
+    const h = this.vrm!.humanoid
+    const up = h.getNormalizedBoneNode(`${side}UpperArm`), lo = h.getNormalizedBoneNode(`${side}LowerArm`), hand = h.getNormalizedBoneNode(`${side}Hand`)
+    if (!up || !lo || !hand || !up.parent) return
+    up.parent.updateWorldMatrix(true, true)
+    const S = up.getWorldPosition(new THREE.Vector3())
+    const l1 = lo.position.length(), l2 = hand.position.length()
+    const toT = target.clone().sub(S)
+    const d = Math.min(Math.max(toT.length(), 0.02), (l1 + l2) * 0.999)
+    const dir = toT.normalize()
+    const a = (l1 * l1 - l2 * l2 + d * d) / (2 * d), bend = Math.sqrt(Math.max(0, l1 * l1 - a * a))
+    const perp = pole.clone().addScaledVector(dir, -pole.dot(dir))
+    if (perp.lengthSq() < 1e-6) perp.set(0, -1, 0)
+    perp.normalize()
+    const elbow = S.clone().addScaledVector(dir, a).addScaledVector(perp, bend)
+    const wrist = S.clone().addScaledVector(dir, d)
+    // upper arm: turn its rest direction (towards the elbow) onto the wanted one
+    const pq = up.parent.getWorldQuaternion(new THREE.Quaternion())
+    const rest1 = lo.position.clone().normalize().applyQuaternion(pq)
+    const w1 = new THREE.Quaternion().setFromUnitVectors(rest1, elbow.clone().sub(S).normalize()).multiply(pq)
+    up.quaternion.slerp(pq.clone().invert().multiply(w1), w)
+    up.updateWorldMatrix(false, true)
+    // forearm: from where the elbow now is, onto the wrist
+    const uq = up.getWorldQuaternion(new THREE.Quaternion())
+    const e = lo.getWorldPosition(new THREE.Vector3())
+    const rest2 = hand.position.clone().normalize().applyQuaternion(uq)
+    const w2 = new THREE.Quaternion().setFromUnitVectors(rest2, wrist.clone().sub(e).normalize()).multiply(uq)
+    lo.quaternion.slerp(uq.clone().invert().multiply(w2), w)
+    lo.updateWorldMatrix(false, true)
+  }
+
   private bedOn = false
   /** Turn the bed on (lying) or off for every spring bone joint. */
   /** show or hide the shoes: the parts whose material is named like a shoe (e.g. "Shoes_01_CLOTH") */
@@ -517,7 +733,8 @@ export class Avatar {
     })
   }
 
-  private surfaces: { collider: VRMSpringBoneCollider; shape: VRMSpringBoneColliderShapePlane }[] = []
+  private surfaces: { collider: VRMSpringBoneCollider; shape: VRMSpringBoneColliderShapeSphere }[] = []
+  private floorShape?: VRMSpringBoneColliderShapePlane
   private probeT = 0
 
   /**
@@ -527,6 +744,8 @@ export class Avatar {
    * against it instead of passing through. Directions with nothing near park their plane far below.
    */
   private probeSurroundings(dt: number, agent: Agent, physics?: Physics) {
+    // the floor is at y = 0 in the world; the root rises during a jump
+    this.floorShape?.offset.set(0, -this.root.position.y, 0)
     if (!physics || !this.vrm || !this.surfaces.length) return
     this.probeT -= dt
     if (this.probeT > 0) return
@@ -545,11 +764,12 @@ export class Avatar {
         if (h && (!best || h.distance < best.distance)) best = h
       }
       const { shape } = this.surfaces[i]
-      if (!best) { shape.offset.set(0, PARKED, 0); shape.normal.set(0, 1, 0); return }
-      shape.offset.copy(this.root.worldToLocal(new THREE.Vector3(best.point.x, best.point.y, best.point.z)))
-      // normals are directions: turn them by the inverse yaw only
+      if (!best) { shape.offset.set(0, PARKED, 0); shape.radius = 0.01; return }
+      // a big sphere whose surface touches the hit point, from behind it: like a flat patch of that surface
       const n = best.normal
-      shape.normal.set(n.x * c - n.z * s, n.y, n.x * s + n.z * c).normalize()
+      const centre = new THREE.Vector3(best.point.x - n.x * SURFACE_SPHERE, best.point.y - n.y * SURFACE_SPHERE, best.point.z - n.z * SURFACE_SPHERE)
+      shape.offset.copy(this.root.worldToLocal(centre))
+      shape.radius = SURFACE_SPHERE
     })
   }
 
@@ -574,8 +794,20 @@ const BED_TOP = 0.5
 const SURFACE_DIRS: [number, number, number][] = [[0, 0, -1], [0, 0, 1], [1, 0, 0], [-1, 0, 0], [0, -1, 0]]
 /** how far from the head or hips a surface still matters for hair and clothes, metres */
 const SURFACE_REACH = 0.45
-/** a plane this far below the avatar pushes nothing */
+/** a collider this far below the avatar pushes nothing */
 const PARKED = -100
+/** radius of the spheres that stand in for nearby surfaces (backrests, tables, walls), metres */
+const SURFACE_SPHERE = 0.35
+/** least spring gravity and drag for hair and cloth, so they hang and settle (see load) */
+const MIN_GRAVITY = 0.2
+/** from the wrist to the middle of the palm, metres */
+const HAND_LEN = 0.06
+/**
+ * taking the shoes off, seated: the knee comes up and out and the leg turns so the foot is in front, within reach
+ * of both hands (6-7 cm from the palms on a small VRoid avatar), the knee staying 0.2 m from the chest
+ */
+const SHOE_LIFT = { thigh: 0.8, out: 0.7, twist: 0.6, knee: 0.2, spine: 0.8, chest: 0.35 }
+const MIN_DRAG = 0.4
 
 type V3 = [number, number, number]
 type PoseFn = (n: BoneName, x?: number, y?: number, z?: number, rate?: number) => void
@@ -606,3 +838,70 @@ const SIT_ARM = { upX: -0.3, upZ: 1.3, lowY: 0.9, handX: 0.15 }
 const SIT_TALK = { upX: -0.6, upZ: -0.2, lowY: 1.8 }
 
 type BoneName = Parameters<VRM['humanoid']['getNormalizedBoneNode']>[0]
+
+/**
+ * How thick the thighs are: the distance from the thigh's bone line to its skin, for the vertices that mostly
+ * follow the upper leg, around the middle of the thigh (99th percentile, so a stray vertex does not count).
+ */
+function thighRadius(vrm: VRM) {
+  const h = vrm.humanoid
+  const top = h.getRawBoneNode('leftUpperLeg'), knee = h.getRawBoneNode('leftLowerLeg')
+  if (!top || !knee) return 0.07
+  vrm.scene.updateMatrixWorld(true)
+  const a = top.getWorldPosition(new THREE.Vector3()), b = knee.getWorldPosition(new THREE.Vector3())
+  const axis = b.clone().sub(a), len = axis.length()
+  axis.normalize()
+  const d: number[] = [], v = new THREE.Vector3()
+  vrm.scene.traverse(o => {
+    if (!(o instanceof THREE.SkinnedMesh)) return
+    const pos = o.geometry.getAttribute('position'), si = o.geometry.getAttribute('skinIndex'), sw = o.geometry.getAttribute('skinWeight')
+    if (!si || !sw) return
+    const bi = o.skeleton.bones.indexOf(top as THREE.Bone)
+    if (bi < 0) return
+    for (let i = 0; i < pos.count; i += 2) {
+      let best = 0, idx = -1
+      for (let k = 0; k < 4; k++) { const wk = sw.getComponent(i, k); if (wk > best) { best = wk; idx = si.getComponent(i, k) } }
+      if (idx !== bi || best < 0.6) continue
+      o.getVertexPosition(i, v).applyMatrix4(o.matrixWorld)
+      const rel = v.clone().sub(a), along = rel.dot(axis)
+      if (along < len * 0.25 || along > len * 0.75) continue
+      d.push(rel.addScaledVector(axis, -along).length())
+    }
+  })
+  if (!d.length) return 0.07
+  d.sort((x, y) => x - y)
+  return Math.min(0.12, d[Math.floor(d.length * 0.99)])
+}
+
+/**
+ * How deep the body is behind the model's origin: the torso's back and the back of the head (whichever is deeper),
+ * from the vertices that follow them (99th percentile, hair left out).
+ */
+function backDepth(vrm: VRM) {
+  const h = vrm.humanoid
+  vrm.scene.updateMatrixWorld(true)
+  // lying, the body turns about its feet, so the depth behind the model's origin (it faces +z) is what goes down
+  const parts = [['hips', 'spine', 'chest', 'upperChest'], ['head', 'neck']]
+  let deepest = 0.1
+  const v = new THREE.Vector3()
+  for (const names of parts) {
+    const bones = new Set(names.map(n => h.getRawBoneNode(n as Parameters<typeof h.getRawBoneNode>[0])).filter(Boolean))
+    const d: number[] = []
+    vrm.scene.traverse(o => {
+      if (!(o instanceof THREE.SkinnedMesh) || /hair/i.test(o.name)) return
+      const pos = o.geometry.getAttribute('position'), si = o.geometry.getAttribute('skinIndex'), sw = o.geometry.getAttribute('skinWeight')
+      if (!si || !sw) return
+      for (let i = 0; i < pos.count; i += 2) {
+        let best = 0, idx = -1
+        for (let k = 0; k < 4; k++) { const wk = sw.getComponent(i, k); if (wk > best) { best = wk; idx = si.getComponent(i, k) } }
+        if (best < 0.5 || !bones.has(o.skeleton.bones[idx])) continue
+        o.getVertexPosition(i, v).applyMatrix4(o.matrixWorld)
+        d.push(-v.z)
+      }
+    })
+    if (!d.length) continue
+    d.sort((x, y) => x - y)
+    deepest = Math.max(deepest, d[Math.floor(d.length * 0.99)])
+  }
+  return Math.min(0.25, deepest)
+}
