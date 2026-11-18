@@ -8,6 +8,7 @@
  */
 import type { Vec2 } from '../types'
 import type { World } from '../world'
+import { dist } from '../world'
 import type { Step } from './index'
 
 /**
@@ -29,6 +30,11 @@ export function leaf(world: World, open: number): [Vec2, Vec2] {
   return [h, { x: h.x + Math.sin(a) * DOOR_LEAF.width, z: h.z + Math.cos(a) * DOOR_LEAF.width }]
 }
 
+/** is `p` where the leaf swings (outside the wall, within its width of the hinge), with a body's margin? */
+export function inSwing(world: World, p: Vec2) {
+  return p.x >= world.door.x - 0.05 && dist(p, hinge(world)) <= DOOR_LEAF.width + 0.3
+}
+
 /** the spots to stand at on either side: inside clear of the wall, outside clear of the leaf's swing */
 export function doorSpots(world: World) {
   const d = world.door
@@ -40,7 +46,8 @@ export function doorSpots(world: World) {
   }
 }
 
-const insideHouse = (world: World, p: Vec2) => p.x < world.door.x
+/** inside the house walls (the yard and the meadow are outside) */
+export const insideHouse = (world: World, p: Vec2) => Math.abs(p.x) < world.bounds.w / 2 && Math.abs(p.z) < world.bounds.d / 2
 
 /** does walking along `path` (starting at `from`) take you through the house door? */
 export function crossesDoor(world: World, from: Vec2, path: Vec2[]) {
@@ -66,8 +73,9 @@ export function throughDoor(world: World, from: Vec2): Step[] {
   if (goingOut) {
     const [, handleOpen] = leaf(world, 1)
     return [
-      { do: 'walk', to: s.inside },
+      // take the door before walking up to it, so nobody else is waiting on the spot we need
       { do: 'door', take: true },
+      { do: 'walk', to: s.inside },
       { do: 'face', heading: facing(s.inside, { x: world.door.x, z: world.door.z }), secs: 0.4 },
       { do: 'act', motion: 'reach_handle', secs: 0.6 },
       { do: 'act', motion: 'push_door', secs: DOOR_SECS, door: 'open' },
@@ -80,8 +88,8 @@ export function throughDoor(world: World, from: Vec2): Step[] {
     ]
   }
   return [
-    { do: 'walk', to: s.outside },
     { do: 'door', take: true },
+    { do: 'walk', to: s.outside },
     { do: 'face', heading: facing(s.outside, handleShut), secs: 0.4 },
     { do: 'act', motion: 'reach_handle', secs: 0.6 },
     { do: 'act', motion: 'pull_door', secs: DOOR_SECS, door: 'open' },

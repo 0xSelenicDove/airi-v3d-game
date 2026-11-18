@@ -4,29 +4,77 @@
  * Lying down: walk to the side of the bed, turn your back to it, sit down on the edge, take the shoes off,
  * then lie down. Getting up is the same in reverse: sit up on the edge, put the shoes on, stand up, and step
  * back to the open floor. The bed's side is reached by a short squeeze along the bed that keeps clear of all
- * furniture, so nothing passes through anything (R0).
+ * furniture, of other beds, and of the walls of a tent around the bed, so nothing passes through anything (R0).
  */
-import type { Affordance, Vec2, WorldObject } from '../types'
+import type { Affordance, Footprint, Vec2, WorldObject } from '../types'
 import type { World } from '../world'
+import { dist } from '../world'
 import type { Step } from './index'
 
-/** head towards -x on every bed and cot (the head end is at the wall); see agent.ts for lying down */
+/** head towards -x on every bed and cot (see agent.ts for lying down) */
 export const LIE_HEADING = Math.PI / 2
 /** how far from the bed edge one stands, and how far in from it one sits */
 const STAND_OUT = 0.32
 const SIT_IN = 0.14
+/** how far in from the end of the bed one sits on its side */
+const ALONG = 0.55
 /** a body is about 0.4 m wide: the squeeze needs at least this clearance from furniture on its centre line */
 export const BODY_CLEARANCE = 0.2
+/** size of a bed without its own footprint (the camp cots: measured in public/models/outdoor.glb) */
+const COT = { w: 2.2, d: 0.72 }
 
-export interface Rect { cx: number; cz: number; w: number; d: number }
+export type Rect = Footprint
 
-/** the bed's footprint: the furniture under the sleeping spot, or a camp-cot size around it */
+const contains = (f: Rect, p: Vec2) => Math.abs(p.x - f.cx) <= f.w / 2 && Math.abs(p.z - f.cz) <= f.d / 2
+const rectDist = (f: Rect, p: Vec2) =>
+  Math.hypot(Math.max(0, Math.abs(p.x - f.cx) - f.w / 2), Math.max(0, Math.abs(p.z - f.cz) - f.d / 2))
+
+/** something big that a bed stands inside, such as the tent; its footprint covers the whole floor inside it */
+function enclosure(world: World, obj: WorldObject): Footprint | undefined {
+  return world.obstacles.find(f => contains(f, obj.usePos) && f.w * f.d >= 4)
+}
+
+/** the bed's footprint: the furniture under the sleeping spot, or a cot-sized one around it */
 export function bedRect(world: World, obj: WorldObject): Rect {
   const p = obj.usePos
   const under = world.obstacles
-    .filter(f => Math.abs(p.x - f.cx) <= f.w / 2 && Math.abs(p.z - f.cz) <= f.d / 2 && f.w * f.d < 4)
+    .filter(f => contains(f, p) && f.w * f.d < 4)
     .sort((a, b) => a.w * a.d - b.w * b.d)[0]
-  return under ?? { cx: p.x, cz: p.z, w: 1.9, d: 0.72 }
+  return under ?? { cx: p.x, cz: p.z, ...COT }
+}
+
+/**
+ * Room around a point near a bed: furniture (ignoring an enclosure such as the tent), all beds in the same
+ * enclosure, and the enclosure's walls except its open side (the side one comes in from).
+ */
+function room(world: World, obj: WorldObject) {
+  const enc = enclosure(world, obj)
+  const beds = enc
+    ? world.objects.filter(o => o.affordances.some(a => a.pose === 'lie') && contains(enc, o.usePos)).map(o => bedRect(world, o))
+    : []
+  const from = obj.approach ?? obj.usePos
+  // the open side of the enclosure faces the approach point
+  const open = enc && (Math.abs(from.x - enc.cx) / enc.w > Math.abs(from.z - enc.cz) / enc.d
+    ? (from.x < enc.cx ? 'x0' : 'x1') : (from.z < enc.cz ? 'z0' : 'z1'))
+  return (p: Vec2) => {
+    let d = world.clearance(p, enc ? [enc] : [])
+    for (const b of beds) d = Math.min(d, rectDist(b, p))
+    if (enc && contains(enc, p)) {
+      const walls = { x0: p.x - (enc.cx - enc.w / 2), x1: enc.cx + enc.w / 2 - p.x, z0: p.z - (enc.cz - enc.d / 2), z1: enc.cz + enc.d / 2 - p.z }
+      for (const [k, v] of Object.entries(walls)) if (k !== open) d = Math.min(d, v)
+    }
+    return d
+  }
+}
+
+function clearWay(clearance: (p: Vec2) => number, way: Vec2[], min: number) {
+  for (let i = 1; i < way.length; i++) {
+    const a = way[i - 1], b = way[i], n = Math.max(1, Math.ceil(dist(a, b) / 0.05))
+    for (let k = 0; k <= n; k++) {
+      if (clearance({ x: a.x + (b.x - a.x) * k / n, z: a.z + (b.z - a.z) * k / n }) < min) return false
+    }
+  }
+  return true
 }
 
 export interface Bedside {
@@ -41,22 +89,26 @@ export interface Bedside {
 }
 
 /**
- * Where to sit on the bed: the side with room to stand (the head is at -x, so the sides are the ±z edges),
- * near the foot end; if neither side has room, the foot end itself.
+ * Where to sit on the bed: on a long side (the head is at -x, so the sides are the ±z edges), near the end one
+ * comes from, on the side with the most room; if neither side has room, on that end itself.
  */
 export function bedside(world: World, obj: WorldObject): Bedside {
   const r = bedRect(world, obj)
-  const foot = obj.approach ?? { x: r.cx + r.w / 2 + 0.45, z: r.cz }
-  const x = r.cx + r.w / 2 - 0.55 // a little in from the foot end
+  const clearance = room(world, obj)
+  // a tent is high enough to stand in only along its middle (its ridge), so in one, take the side facing it
+  const enc = enclosure(world, obj)
+  const score = (stand: Vec2) => enc ? -Math.abs(stand.z - enc.cz) : clearance(stand)
+  const end = (obj.approach?.x ?? r.cx + 1) >= r.cx ? 1 : -1      // the end of the bed nearest the way in
+  const endX = r.cx + end * r.w / 2
+  const from = obj.approach ?? { x: endX + end * 0.45, z: r.cz }
+  const x = endX - end * ALONG
   const sides = [1, -1]
     .map(side => {
       const edge = r.cz + side * r.d / 2
       const stand = { x, z: edge + side * STAND_OUT }
-      const corner = { x: r.cx + r.w / 2 + STAND_OUT, z: edge + side * STAND_OUT }
-      const way = [foot, corner, stand]
-      const ok = world.clearance(stand) >= BODY_CLEARANCE &&
-        way.every((p, i) => i === 0 || world.clearSegment(way[i - 1], p, BODY_CLEARANCE))
-      return { side, edge, stand, way, ok, room: world.clearance(stand) }
+      const corner = { x: endX + end * STAND_OUT, z: edge + side * STAND_OUT }
+      const way = [from, corner, stand]
+      return { side, edge, stand, way, ok: clearance(stand) >= BODY_CLEARANCE && clearWay(clearance, way, BODY_CLEARANCE), room: score(stand) }
     })
     .filter(s => s.ok)
     .sort((a, b) => b.room - a.room)
@@ -64,8 +116,9 @@ export function bedside(world: World, obj: WorldObject): Bedside {
   if (best) {
     return { stand: best.stand, sit: { x, z: best.edge - best.side * SIT_IN }, out: best.side > 0 ? 0 : Math.PI, way: best.way }
   }
-  // no room along either side: sit on the foot end, facing away from the bed
-  return { stand: foot, sit: { x: r.cx + r.w / 2 - SIT_IN, z: r.cz }, out: LIE_HEADING, way: [foot] }
+  // no room along either side: walk up to the end of the bed and sit on it, facing away from the bed
+  const stand = { x: endX + end * STAND_OUT, z: r.cz }
+  return { stand, sit: { x: endX - end * SIT_IN, z: r.cz }, out: end > 0 ? Math.PI / 2 : -Math.PI / 2, way: [from, stand] }
 }
 
 /** the steps from anywhere to lying in the bed, ending with the activity itself */

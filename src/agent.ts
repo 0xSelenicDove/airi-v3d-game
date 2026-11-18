@@ -4,7 +4,7 @@ import { MemoryStream } from './memory'
 import { GESTURE_INFO, emotionOf, gestureOf, type Emotion, type Gesture } from './acting'
 import type { SkillMotion, Step } from './skills'
 import { getUp, lieDown } from './skills/bed'
-import { crossesDoor, throughDoor } from './skills/door'
+import { crossesDoor, doorSpots, inSwing, throughDoor } from './skills/door'
 import { DETOUR_TRIES, DETOUR_WAIT, STUCK_THINK, THINK_BLOCKED, THINK_GIVE_UP, THINK_WAIT, routeAround } from './skills/detour'
 
 type State =
@@ -68,6 +68,8 @@ export class Agent {
   /** height of the feet above the ground, for jumps */
   lift = 0
   private stuck = 0
+  /** how often this trip has been blocked so far (rule R4); it gives up after DETOUR_TRIES */
+  private detours = 0
 
   constructor(public persona: Persona, start: Vec2, private brain: Brain, private world: World) {
     this.pos = { ...start }
@@ -296,7 +298,9 @@ export class Agent {
             moved = true
             break
           }
-          this.stuck = moved ? Math.max(0, this.stuck - realDt) : this.stuck + realDt
+          // stuck means not getting closer to where we are going: sidestepping on the spot does not count (R4)
+          const progress = d - dist(this.pos, target)
+          this.stuck = moved && progress > step * 0.3 ? Math.max(0, this.stuck - realDt) : this.stuck + realDt
           this.speedNow = moved ? step / Math.max(realDt, 1e-6) : 0
           if (this.stuck >= STUCK_THINK) {
             this.stuck = 0
@@ -304,7 +308,7 @@ export class Agent {
             const goal = s.path[s.path.length - 1]
             this.startRoutine([
               { do: 'think', text: THINK_BLOCKED, secs: 1.2 },
-              { do: 'reroute', to: goal, tries: 0, exact: !!s.exact },
+              { do: 'reroute', to: goal, exact: !!s.exact },
               ...(s.next ?? []),
             ], s.obj, s.aff)
           }
@@ -431,12 +435,26 @@ export class Agent {
       : obj.approach ? [{ do: 'walk', to: obj.approach }, { do: 'onto', to: { ...obj.usePos } }, { do: 'use' }]
       : [{ do: 'walk', to: this.spotAt(obj, aff) }, { do: 'use' }]
     this.stuck = 0
+    this.detours = 0
+    // a fresh plan starts without the door: it takes the door again if the way leads through it
+    if (this.world.doorUser === this.name) this.world.doorUser = undefined
     this.startRoutine(steps, obj, aff)
   }
 
   private startRoutine(steps: Step[], obj: WorldObject, aff: Affordance) {
     this.state = { k: 'routine', steps: [...steps], obj, aff, t: 0, from: { ...this.pos }, doorFrom: this.world.doorOpen, started: false }
     this.runStep(0)
+  }
+
+  /** blocked for too long (R4): let go of the door and of whatever was claimed, and decide again */
+  private giveUp(id: string) {
+    this.thought = THINK_GIVE_UP
+    this.thoughtUntil = performance.now() + 3000
+    this.lastResult = `could not get to ${id}: the way was blocked`
+    this.log(this.lastResult, 3)
+    if (this.world.doorUser === this.name) this.world.doorUser = undefined
+    this.release()
+    this.state = { k: 'idle' }
   }
 
   /** finish the current skill step and go on with the next one */
@@ -475,7 +493,8 @@ export class Agent {
             s.started = false
             continue
           }
-          this.state = { k: 'moving', path, obj: s.obj, aff: s.aff, next: s.steps.slice(1) }
+          // walking up to the door it holds, nobody stops it for a chat
+          this.state = { k: 'moving', path, obj: s.obj, aff: s.aff, next: s.steps.slice(1), busy: this.world.doorUser === this.name }
           return
         }
         case 'squeeze':
@@ -490,6 +509,12 @@ export class Agent {
           if (s.t < step.secs) return
           break
         case 'pose': {
+          if (first && step.pose === 'stand' && this.world.inhabitants.some(o => o !== this && o.pose === 'stand' && dist(o.pos, step.at) < PERSONAL_SPACE)) {
+            // someone stands where we would stand up: wait for them to move (R0)
+            s.steps.unshift({ do: 'think', text: 'Someone is standing right there. I will wait.', secs: 1.5 })
+            s.started = false
+            continue
+          }
           if (first) { this.pose = step.pose; this.heading = step.heading }
           const k = Math.min(1, s.t / step.secs), e = k * k * (3 - 2 * k)
           this.pos = { x: s.from.x + (step.at.x - s.from.x) * e, z: s.from.z + (step.at.z - s.from.z) * e }
@@ -497,6 +522,13 @@ export class Agent {
           break
         }
         case 'act': {
+          if (first && step.door && this.world.inhabitants.some(o => o !== this && inSwing(this.world, o.pos))) {
+            // someone is where the door swings: do not hit them with it (R0); after a while, give the door up
+            if (++this.detours > DETOUR_TRIES * 2) { this.giveUp(s.obj.id); return }
+            s.steps.unshift({ do: 'think', text: 'Someone is behind the door. I will wait.', secs: 1.5 })
+            s.started = false
+            continue
+          }
           if (first) {
             this.gesture = step.motion
             this.gestureStart = performance.now()
@@ -521,8 +553,11 @@ export class Agent {
           if (step.take) {
             const user = this.world.doorUser
             if (user && user !== this.name) {
-              // someone else is at the door: wait for them
-              s.steps.unshift({ do: 'think', text: `${user} is using the door. I will wait.`, secs: 1.5 })
+              // someone else is at the door: wait for them, out of the way of the door's swing
+              s.steps.unshift(
+                ...(inSwing(this.world, this.pos) ? [{ do: 'walk', to: doorSpots(this.world).outside } as Step] : []),
+                { do: 'think', text: `${user} is using the door. I will wait.`, secs: 1.5 },
+              )
               s.started = false
               continue
             }
@@ -530,35 +565,38 @@ export class Agent {
           } else if (this.world.doorUser === this.name) this.world.doorUser = undefined
           break
         case 'reroute': {
-          const blockers = this.world.inhabitants
-            .filter(o => o !== this && o.pose !== 'sit' && o.pose !== 'lie' && dist(o.pos, this.pos) < 1.6)
-            .map(o => o.pos)
-          const path = step.exact || !blockers.length ? null : routeAround(this.world, this.pos, step.to, blockers)
-          const clear = !blockers.some(b => dist(b, this.pos) < PERSONAL_SPACE + 0.15)
-          if (path || (clear && !step.exact)) {
-            this.state = { k: 'moving', path: path ?? this.world.findPath(this.pos, step.to), obj: s.obj, aff: s.aff, next: s.steps.slice(1) }
+          this.detours++
+          // is the way clear again (the person moved on, the ball rolled away, the door is free)?
+          const ahead = step.exact ? step.to : (this.world.findPath(this.pos, step.to)[0] ?? step.to)
+          const d = dist(this.pos, ahead) || 1
+          const probe = { x: this.pos.x + (ahead.x - this.pos.x) / d * 0.15, z: this.pos.z + (ahead.z - this.pos.z) / d * 0.15 }
+          if (!this.crowds(probe)) {
+            this.state = step.exact
+              ? { k: 'moving', path: [{ ...step.to }], obj: s.obj, aff: s.aff, next: s.steps.slice(1), exact: true, busy: true }
+              : { k: 'moving', path: this.world.findPath(this.pos, step.to), obj: s.obj, aff: s.aff, next: s.steps.slice(1) }
             return
           }
-          if (clear && step.exact) {
-            this.state = { k: 'moving', path: [{ ...step.to }], obj: s.obj, aff: s.aff, next: s.steps.slice(1), exact: true, busy: true }
-            return
-          }
-          if (step.tries + 1 < DETOUR_TRIES) {
-            s.steps.splice(0, 1, { do: 'think', text: THINK_WAIT, secs: DETOUR_WAIT }, { ...step, tries: step.tries + 1 })
+          if (this.detours <= DETOUR_TRIES) {
+            // still blocked: plan round the people and the stuck things nearby, if there is a way
+            const blockers = [
+              ...this.world.inhabitants.filter(o => o !== this && o.pose !== 'sit' && o.pose !== 'lie').map(o => o.pos),
+              ...this.world.props,
+            ].filter(b => dist(b, this.pos) < 1.6)
+            const path = step.exact || !blockers.length ? null : routeAround(this.world, this.pos, step.to, blockers)
+            if (path) {
+              this.state = { k: 'moving', path, obj: s.obj, aff: s.aff, next: s.steps.slice(1) }
+              return
+            }
+            // no way round: wait for it to clear, then look again
+            s.steps.splice(0, 1, { do: 'think', text: THINK_WAIT, secs: DETOUR_WAIT }, step)
             s.started = false
             continue
           }
-          // give up: let go of the door and of whatever was claimed, and decide again
-          this.thought = THINK_GIVE_UP
-          this.thoughtUntil = performance.now() + 3000
-          this.lastResult = `could not get to ${s.obj.id}: the way was blocked`
-          this.log(this.lastResult, 3)
-          if (this.world.doorUser === this.name) this.world.doorUser = undefined
-          this.release()
-          this.state = { k: 'idle' }
+          this.giveUp(s.obj.id)
           return
         }
         case 'use':
+          this.detours = 0
           this.pose = s.aff.pose
           if (s.aff.pose !== 'lie') this.heading = Math.atan2(s.obj.pos.x - this.pos.x, s.obj.pos.z - this.pos.z)
           this.speedNow = 0
@@ -627,7 +665,18 @@ export class Agent {
 
   /** would standing at `p` bring us closer than personal space to someone who stands or walks? */
   private crowds(p: Vec2) {
-    return this.world.inhabitants.some(o => {
+    const w = this.world
+    // the door swings here while someone else is using it
+    if (w.doorUser && w.doorUser !== this.name && inSwing(w, p) && !inSwing(w, this.pos)) return true
+    // a ball that cannot roll away (against a wall or furniture) is in the way; a free one gets pushed
+    for (const b of w.props) {
+      const d = dist(p, b)
+      if (d < 0.26 + b.r && d < dist(this.pos, b)) {
+        const k = 0.15 / (d || 1)
+        if (!w.isFree({ x: b.x + (b.x - p.x) * k, z: b.z + (b.z - p.z) * k })) return true
+      }
+    }
+    return w.inhabitants.some(o => {
       if (o === this || o.pose === 'sit' || o.pose === 'lie') return false
       const next = dist(p, o.pos)
       return next < PERSONAL_SPACE && next < dist(this.pos, o.pos)

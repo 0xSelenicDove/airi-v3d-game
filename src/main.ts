@@ -347,6 +347,7 @@ function frame(now: number) {
   if (physics) {
     for (const a of agents) physics.syncAgent(a.name, { x: a.pos.x, y: a.lift, z: a.pos.z }, a.pose)
     physics.step(dt)
+    world.props = balls.map(b => { const t = b.prop.body.translation(); return { x: t.x, z: t.z, r: b.prop.radius } })
     for (const b of balls) {
       const t = b.prop.body.translation(), q = b.prop.body.rotation()
       b.mesh.position.set(t.x, t.y, t.z)

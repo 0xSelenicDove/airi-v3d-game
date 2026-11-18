@@ -186,3 +186,110 @@ describe('R4: blocked', () => {
     expect(closest).toBeGreaterThanOrEqual(PERSONAL_SPACE * 0.95)
   })
 })
+
+describe('R0, R2 in the tent: the camp cots', () => {
+  it('goes in through the open side, sits on the cot from the aisle, and never slides through the tent or the other cot', () => {
+    const w = new World()
+    w.minutes = 22 * 60 // sleeping in the tent is a night activity
+    const a = new Agent(persona('Airi', 'bed'), { x: 24, z: 2.6 }, brain, w)
+    const cot = w.find('tent_cot_1')!, other = bedRect(w, w.find('tent_cot_2')!), mine = bedRect(w, cot)
+    const seen: { pose: string; pos: Vec2 }[] = []
+    send(a, 'tent_cot_1', 'sleep_in_tent')
+    run([a], () => a.state.k === 'doing', () => seen.push({ pose: a.pose, pos: { ...a.pos } }))
+    expect(a.state.k).toBe('doing')
+    const firstSit = seen.findIndex(s => s.pose === 'sit')
+    expect(firstSit).toBeGreaterThan(0)
+    const sitAt = seen[firstSit].pos
+    // sat down from the aisle between the cots (the middle of the tent, where it is high enough to stand)
+    expect(sitAt.z).toBeGreaterThan(mine.cz)
+    expect(seen[firstSit - 1].pos.z).toBeGreaterThan(mine.cz + mine.d / 2)
+    expect(seen[firstSit - 1].pos.z).toBeLessThan(other.cz - other.d / 2)
+    // no big slide while sitting: the body moves only from the edge onto the cot
+    const sitting = seen.filter(s => s.pose === 'sit').map(s => s.pos)
+    for (let i = 1; i < sitting.length; i++) expect(dist(sitting[i], sitting[0])).toBeLessThan(0.6)
+    // standing, never inside either cot
+    for (const s of seen.filter(s => s.pose === 'stand')) {
+      expect(inside(mine, s.pos)).toBe(false)
+      expect(inside(other, s.pos)).toBe(false)
+    }
+  })
+})
+
+describe('R0 at the door', () => {
+  it('walking between the meadow and the yard does not touch the house door', () => {
+    const w = new World()
+    w.minutes = 12 * 60
+    const a = new Agent(persona('Airi', 'bed'), { x: 16, z: -4 }, brain, w)
+    send(a, 'bench_seat_1', 'relax')
+    let touched = false
+    run([a], () => a.state.k === 'doing', () => { touched ||= w.doorUser !== undefined || w.doorOpen > 0 })
+    expect(a.state.k).toBe('doing')
+    expect(touched).toBe(false)
+  })
+
+  it('does not open the door while someone stands where it swings, and opens it once they have gone', () => {
+    const w = new World()
+    w.minutes = 12 * 60
+    const opener = new Agent(persona('Airi', 'bed'), { x: 0, z: 0 }, brain, w)
+    const outside = new Agent(persona('Luna', 'bed2'), { x: w.door.x + 0.6, z: w.door.z - 0.3 }, brain, w) // right behind the door
+    outside.state = { k: 'waiting', left: 1e9 }
+    send(opener, 'lawn', 'enjoy_fresh_air')
+    let waited = false, openWhileThere = 0
+    run([opener, outside], () => waited || opener.state.k === 'doing', () => {
+      if (/behind the door/.test(opener.thought)) waited = true
+      openWhileThere = Math.max(openWhileThere, w.doorOpen)
+    })
+    expect(waited).toBe(true)
+    expect(openWhileThere).toBe(0)
+    // Luna steps away; the door opens and Airi gets out
+    outside.pos = { x: w.door.x + 3, z: w.door.z + 3 }
+    run([opener, outside], () => opener.state.k === 'doing')
+    expect(opener.state.k).toBe('doing')
+    expect(w.doorOpen).toBe(0)
+  })
+
+  it('people inside and outside the house do not meet through the wall', async () => {
+    const { Social } = await import('../src/social')
+    const w = new World()
+    const a = new Agent(persona('Airi', 'bed'), { x: w.door.x - 0.7, z: w.door.z }, brain, w)
+    const b = new Agent(persona('Luna', 'bed2'), { x: w.door.x + 0.8, z: w.door.z + 0.8 }, brain, w)
+    const social = new Social(w, [a, b], () => 0.1)
+    a.state = { k: 'waiting', left: 1e9 }
+    w.objects.push({ id: 'far', kind: 'spot', pos: { x: 9, z: 6 }, usePos: { x: 8, z: 6 }, affordances: [{ verb: 'look_around', duration: 600, effects: {}, pose: 'stand' }] })
+    send(b, 'far', 'look_around')
+    let chatted = false
+    run([a, b], () => b.state.k === 'doing', () => { social.update(DT); chatted ||= a.state.k === 'chatting' })
+    expect(chatted).toBe(false)
+  })
+})
+
+describe('R0 with loose things', () => {
+  it('a ball stuck in a corner of the fence cannot roll away: the walker stops short instead of squashing it', () => {
+    const w = new World()
+    const y = w.yard
+    // a ball in the south-west corner of the yard; walking west along the fence pushes it into the fence
+    const ball = { x: y.x0 + 0.5, z: y.z0 + 0.55, r: 0.17 }
+    w.props = [ball]
+    const walker = new Agent(persona('Airi', 'bed'), { x: ball.x + 3, z: ball.z }, brain, w)
+    w.objects.push({ id: 'corner', kind: 'spot', pos: { x: ball.x - 1, z: ball.z }, usePos: { ...ball }, affordances: [{ verb: 'look_around', duration: 600, effects: {}, pose: 'stand' }] })
+    send(walker, 'corner', 'look_around')
+    let closest = Infinity
+    run([walker], () => walker.state.k === 'waiting' && /blocked/.test(walker.lastResult ?? ''), () => {
+      closest = Math.min(closest, dist(walker.pos, ball))
+    })
+    expect(walker.lastResult).toMatch(/blocked/)
+    expect(closest).toBeGreaterThanOrEqual(0.26 + ball.r - 0.01)
+  })
+
+  it('a ball out in the open does not stop anyone: it gets pushed', () => {
+    const w = new World()
+    const y = w.yard
+    const ball = { x: 0, z: y.z0 + 2.5, r: 0.17 }
+    w.props = [ball]
+    const walker = new Agent(persona('Airi', 'bed'), { x: -2, z: ball.z }, brain, w)
+    w.objects.push({ id: 'east', kind: 'spot', pos: { x: 3, z: ball.z }, usePos: { x: 2, z: ball.z }, affordances: [{ verb: 'look_around', duration: 600, effects: {}, pose: 'stand' }] })
+    send(walker, 'east', 'look_around')
+    run([walker], () => walker.state.k === 'doing')
+    expect(walker.state.k).toBe('doing')
+  })
+})

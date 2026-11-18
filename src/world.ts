@@ -17,6 +17,8 @@ export class World {
   doorOpen = 0
   /** who is using the door right now, so two people do not open and close it at the same time */
   doorUser?: string
+  /** loose things on the ground (the beach balls), kept up to date from the physics world by main.ts */
+  props: { x: number; z: number; r: number }[] = []
   /** objectId -> agent name; sitting/lying objects fit one agent at a time */
   private occupancy = new Map<string, string>()
   /** the house: 10 x 8 m, centred on the origin */
@@ -98,9 +100,10 @@ export class World {
    * How far `p` is from the nearest piece of furniture (its footprint) or, inside the house, from a wall.
    * Used for the few steps that leave the grid, such as squeezing along a bed to its side.
    */
-  clearance(p: Vec2) {
+  clearance(p: Vec2, ignore: Footprint[] = []) {
     let d = Infinity
     for (const f of this.obstacles) {
+      if (ignore.includes(f)) continue
       const dx = Math.max(0, Math.abs(p.x - f.cx) - f.w / 2), dz = Math.max(0, Math.abs(p.z - f.cz) - f.d / 2)
       d = Math.min(d, Math.hypot(dx, dz))
     }

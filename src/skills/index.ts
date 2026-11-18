@@ -31,7 +31,7 @@ export type Step =
   /** start the activity this plan was for */
   | { do: 'use' }
   /** blocked: look for another way round to `to`, or wait and try again (skills/detour.ts) */
-  | { do: 'reroute'; to: Vec2; tries: number; exact: boolean }
+  | { do: 'reroute'; to: Vec2; exact: boolean }
 
 export interface Rule {
   id: string
