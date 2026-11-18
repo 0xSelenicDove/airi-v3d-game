@@ -20,7 +20,8 @@ Built with TypeScript, [three.js](https://threejs.org/) and [@pixiv/three-vrm](h
 - **Pathfinding**: grid A* around furniture and walls, with a debug overlay.
 - **Behaviour rules** ([`src/skills/RULES.md`](src/skills/RULES.md)), carried out by skills and checked by tests: nothing passes through anything else; shoes come off before lying in bed; people sit on the bedside before lying down; the door is opened by its handle, slowly, and closed again behind them; and when the way is blocked, they stop and think about another route instead of pushing through.
 - **Chance meetings**: agents walk at a relaxed pace, keep their personal space and pass each other on the right. When two meet, they may stop for small talk, wave hello, or walk on.
-- **VRM avatars** with procedural animation: walking, sitting and typing, reading with a book, sleeping, breathing, blinking, talking gestures, looking at nearby agents.
+- **VRM avatars** with procedural animation: walking, sitting and typing, reading with a book, sleeping, breathing, blinking, talking gestures, looking at nearby agents. Each character has a way of walking and standing of its own, with random variation and idle fidgets.
+- **Motion clips** (optional): walking and standing clips made with the Kimodo motion model ([`tools/kimodo`](tools/kimodo/README.md)), played as `.vrma` under the gestures and the hand IK.
 - **Acting**: the LLM (or the mock brain) can make the body do something, such as wave, raise a hand or a leg, nod, bow, clap, point, stretch, cheer or jump, and set the face (happy, sad, angry, surprised, relaxed, shy). It works with any VRM.
 - **World physics** ([Rapier](https://rapier.rs/)): furniture, walls, fences and trees are solid. A gesture plays only if the body has room for it, otherwise the model is told what is in the way. Jumps follow gravity, people push the beach balls around, and hair and clothes rest against nearby backrests, tables and walls.
 - **In-world UI**: name tags, speech bubbles and thought bubbles above each agent.
@@ -154,7 +155,7 @@ Add `--render <dir>` to also save preview images.
 
 - Only memories and the world clock are saved across reloads; positions and needs reset.
 - Relevance in memory recall is keyword overlap, not embeddings.
-- Animation is procedural, so it is stiffer than real motion clips (`.vrma` clip support would be a natural next step).
+- Without clips in `public/motions`, animation is procedural, so it is stiffer than real motion. Clips cover walking and standing only.
 - Small talk in chance meetings uses fixed lines picked for the situation, not the LLM.
 - Someone who blocks the only way through (a full gate) makes a walker wait and finally give up; nobody is pushed aside.
 - The LLM brain has only been tried with Gemini 2.5 Flash (no thinking) through 302.ai: about 2-3 s per decision, 10 of 11 replies exactly in format and 1 recovered, in a ~100 s run. Other models may need prompt tweaks. Agents also tend to chat repetitively.

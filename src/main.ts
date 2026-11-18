@@ -9,6 +9,7 @@ import { Physics } from './physics'
 import { DOOR_LEAF, hinge, leaf } from './skills/door'
 import { MockBrain, LLMBrain } from './brain'
 import { Avatar } from './avatar'
+import { MotionLibrary } from './clips'
 import { MemoryStream } from './memory'
 import { Speaker, type VoiceStyle } from './tts'
 import type { Persona } from './types'
@@ -253,6 +254,10 @@ const avatars = agents.map(a => {
   av.setName(a.name, a.persona.color)
   return av
 })
+// motion clips (public/motions, made with tools/kimodo); without them the avatars use procedural motion only
+MotionLibrary.load(import.meta.env.BASE_URL + 'motions/')
+  .then(lib => { if (lib.clips.length) avatars.forEach(av => av.useMotions(lib)) })
+  .catch(e => console.warn('motion clips failed to load', e))
 // per-agent models (public/model.vrm, public/model2.vrm); the capsule shows until one loads.
 // Vite's SPA fallback serves HTML for missing files, so sniff the "glTF" magic.
 // Without your own file, the public sample avatar in public/models/avatars is used (licenses in the README there).

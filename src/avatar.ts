@@ -10,6 +10,7 @@ import type { Emotion, Gesture } from './acting'
 import type { SkillMotion } from './skills'
 import type { Physics } from './physics'
 import { Drift, FidgetPicker, hash, seeded, styleFor, type MotionStyle } from './motion-style'
+import { ClipPlayer, type MotionLibrary } from './clips'
 
 /**
  * Visual body for an agent. Starts as a capsule, becomes a VRM once one loads.
@@ -79,6 +80,9 @@ export class Avatar {
   private readonly style: MotionStyle
   private readonly drift: { stride: Drift; arms: Drift; pace: Drift; lean: Drift; sway: Drift; head: Drift }
   private readonly fidgets = new FidgetPicker()
+  /** motion clips (clips.ts), once both the library and the model have loaded */
+  private motions?: MotionLibrary
+  private clips?: ClipPlayer
 
   constructor(color: number, name = '') {
     this.style = styleFor(name)
@@ -146,6 +150,12 @@ export class Avatar {
     this.label.position.y += (y - this.label.position.y) * 0.2
   }
 
+  /** walk and stand with the motion clips in `lib` (clips.ts) */
+  useMotions(lib: MotionLibrary) {
+    this.motions = lib
+    if (this.vrm) this.clips = new ClipPlayer(lib, this.vrm)
+  }
+
   async load(url: string) {
     const loader = new GLTFLoader()
     loader.register(p => new VRMLoaderPlugin(p))
@@ -159,6 +169,7 @@ export class Avatar {
 
     if (this.vrm) { this.inner.remove(this.vrm.scene); VRMUtils.deepDispose(this.vrm.scene) }
     this.vrm = vrm
+    this.clips = this.motions ? new ClipPlayer(this.motions, vrm) : undefined
     this.v0 = vrm.meta?.metaVersion === '0'
     this.capsule.visible = false
     this.inner.add(vrm.scene)
@@ -380,6 +391,14 @@ export class Avatar {
         P('rightHand', 0, 0, Math.sin(t * 6.3 + 1) * 0.2)
       }
     }
+    // ---- motion clips (clips.ts): walking, and standing about while not talking, from captured motion; the
+    // pose above blends into the clip, and everything below goes on top of it ----
+    const idleStand = !moving && !sit && !lie && !swim && verb !== 'use_computer' && verb !== 'read' && !speaking
+    const clipKind = moving && agent.pose === 'stand' ? 'walk' : idleStand ? 'idle' : null
+    const clipRate = clipKind === 'walk'
+      ? stride / (this.clips?.clipSpeed() || WALK_SPEED) * (1 + 0.05 * dr.pace.at(t)) * (agent.walkBack ? -1 : 1)
+      : 1 + 0.08 * dr.pace.at(t)
+    this.clips?.update(dt, clipKind, clipRate)
     // ---- gestures (acting.ts): blended on their own weight, so they fully replace the pose above while they
     // play and fade back out at the end, instead of settling halfway between two targets ----
     const playing = agent.gesture && now < agent.gestureUntil && !lie && !swim ? agent.gesture : ''
@@ -442,7 +461,11 @@ export class Avatar {
     this.crouchDrop += (this.legDrop(crouch) - this.crouchDrop) * (1 - Math.exp(-dt * 20))
     this.inner.position.set(0, this.cur.y - this.crouchDrop, this.cur.z)
     const hips = this.bone('hips')
-    if (hips) hips.position.y = this.hipsY + (moving ? Math.abs(c) * ms.bounce : Math.sin(t * 1.7) * 0.003)
+    if (hips) {
+      const own = this.hipsY + (moving ? Math.abs(c) * ms.bounce : Math.sin(t * 1.7) * 0.003)
+      const clipY = this.clips?.hipsY()
+      hips.position.y = clipY != null && this.clips ? own + (clipY - own) * this.clips.weight : own
+    }
 
     // book prop in the hands while reading
     this.book.visible = verb === 'read'
