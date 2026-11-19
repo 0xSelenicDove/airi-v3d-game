@@ -14,6 +14,7 @@ import { MemoryStream } from './memory'
 import { Speaker, type VoiceStyle } from './tts'
 import type { Persona, TableChair } from './types'
 import { AIRI_NAME, AUTOPILOT_SECS, AiriBrain, AiriLink, DEFAULT_BRIDGE } from './airi'
+import { prepareForScene } from './prepare'
 
 const world = new World()
 // Configure via .env (see .env.example). Without VITE_LLM_URL the mock brain is used.
@@ -73,7 +74,8 @@ addEventListener('beforeunload', save)
 
 // ---- three.js scene ----
 const renderer = new THREE.WebGLRenderer({ antialias: true })
-renderer.setPixelRatio(devicePixelRatio)
+// at most 1.5 device pixels per CSS pixel: on a high-DPI screen the full ratio draws 2 to 4 times the pixels for little gain
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5))
 renderer.setSize(innerWidth, innerHeight)
 renderer.shadowMap.enabled = true
 document.body.appendChild(renderer.domElement)
@@ -197,7 +199,7 @@ const outdoorLights = world.lights.map(l => {
   return { light, base: l.intensity, flicker: l.flicker }
 })
 let doorAngle = 0
-new GLTFLoader().load(`${import.meta.env.BASE_URL}models/room.glb`, gltf => {
+new GLTFLoader().load(`${import.meta.env.BASE_URL}models/room.glb`, async gltf => {
   gltf.scene.traverse(o => {
     if (o instanceof THREE.Mesh) o.castShadow = o.receiveShadow = true
     // the interaction point empties are data for the build checks, not for rendering
@@ -216,8 +218,10 @@ new GLTFLoader().load(`${import.meta.env.BASE_URL}models/room.glb`, gltf => {
     const meshes: THREE.Mesh[] = []
     obj.traverse(o => {
       if (!(o instanceof THREE.Mesh)) return
-      // each wall fades on its own, so it must not share its materials with anything else
+      // each wall fades on its own, so it must not share its materials with anything else; it is transparent from
+      // the start (at full opacity it looks solid), so fading it never recompiles its shader mid-game
       o.material = Array.isArray(o.material) ? o.material.map(m => m.clone()) : o.material.clone()
+      for (const m of Array.isArray(o.material) ? o.material : [o.material]) m.transparent = true
       meshes.push(o)
     })
     walls.push({ meshes, hide, fade: 0 })
@@ -240,6 +244,7 @@ new GLTFLoader().load(`${import.meta.env.BASE_URL}models/room.glb`, gltf => {
     const node = o.chair && gltf.scene.getObjectByName(o.chair.node)
     if (o.chair && node) chairs.push({ node, rest: node.position.clone(), chair: o.chair })
   }
+  await prepareForScene(renderer, camera, scene, gltf.scene)
   scene.add(gltf.scene)
   // the lamps glow warm at night, the glow fades out with the daylight (see frame())
   gltf.scene.updateMatrixWorld(true)
@@ -257,7 +262,7 @@ new GLTFLoader().load(`${import.meta.env.BASE_URL}models/room.glb`, gltf => {
 // surroundings: yard, fence, trees and hills from tools/blender/build_outdoor.py. Pure scenery, no shadows
 // (the shadow camera only covers the room), and fog in the sky colour fades the far hills into the horizon.
 scene.fog = new THREE.Fog(0xffffff, 30, 85)
-new GLTFLoader().load(`${import.meta.env.BASE_URL}models/outdoor.glb`, gltf => {
+new GLTFLoader().load(`${import.meta.env.BASE_URL}models/outdoor.glb`, async gltf => {
   // the tent's south side faces the default camera: see-through, so the sleepers can be seen
   gltf.scene.traverse(o => {
     if (o instanceof THREE.Mesh && !Array.isArray(o.material) && o.material.name === 'out_canvas_south') {
@@ -265,6 +270,7 @@ new GLTFLoader().load(`${import.meta.env.BASE_URL}models/outdoor.glb`, gltf => {
     }
   })
   boatNode = gltf.scene.getObjectByName('BOAT')
+  await prepareForScene(renderer, camera, scene, gltf.scene)
   scene.add(gltf.scene)
   addSolids(gltf.scene, OUTDOOR_SOLID)
 }, undefined, e => console.warn('outdoor load failed', e))
@@ -272,6 +278,7 @@ new GLTFLoader().load(`${import.meta.env.BASE_URL}models/outdoor.glb`, gltf => {
 // avatars: capsule until a VRM loads
 const avatars = agents.map(a => {
   const av = new Avatar(a.persona.color, a.persona.name)
+  av.prepare = root => prepareForScene(renderer, camera, scene, root)
   scene.add(av.root)
   av.setName(a.name, a.persona.color)
   return av
@@ -311,7 +318,7 @@ addEventListener('drop', e => {
   if (f && f.name.toLowerCase().endsWith('.vrm')) avatars[i].loadFile(f).catch(err => console.warn(err))
 })
 
-;(window as any).dbg = { world, agents, avatars, camera, controls, brain, social, airi: airiLink, get physics() { return physics }, balls } // handy for console poking
+;(window as any).dbg = { world, agents, avatars, camera, controls, renderer, scene, brain, social, airi: airiLink, get physics() { return physics }, balls } // handy for console poking
 
 // ---- navigation debug overlay (press G) ----
 const debug = new THREE.Group()
@@ -449,8 +456,7 @@ function frame(now: number) {
     for (const m of wall.meshes) {
       m.castShadow = f < 0.5 // a ghost must not shade the room
       for (const mat of Array.isArray(m.material) ? m.material : [m.material]) {
-        // going transparent changes the compiled shader (an opaque material forces alpha to 1)
-        if (mat.transparent !== f > 0) { mat.transparent = f > 0; mat.needsUpdate = true }
+        // always transparent (set at load): only the opacity changes, so no shader is recompiled
         mat.opacity = 1 - (1 - GHOST) * f
         mat.depthWrite = f === 0
       }

@@ -50,6 +50,8 @@ public/model2.vrm   # second agent (Luna)
 
 Without them, the game uses two public sample avatars from the official VRM samples, in [`public/models/avatars`](public/models/avatars): **Seed-san model by VirtualCast, Inc.** for Luna, and VRM1_Constraint_Twist_Sample by pixiv Inc. for Airi. Both are under the [VRM Public License 1.0](https://vrm.dev/licenses/1.0/). The agents show as colored capsules until a model loads. You can also drag a `.vrm` file onto the page: it replaces the model of the agent on the half of the screen where you drop it.
 
+Textures larger than 1024 px are scaled down to 1024 px when a model loads (`MAX_TEXTURE` in [`src/prepare.ts`](src/prepare.ts)). VRoid exports often have 4096 px textures, about 1.5 GB of GPU memory per character, and at this camera distance they look the same. Shaders compile and textures upload before the model appears, so the game does not freeze when it arrives.
+
 ## Controls
 
 | Input | Action |

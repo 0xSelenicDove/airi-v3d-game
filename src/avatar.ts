@@ -81,6 +81,8 @@ export class Avatar {
   private readonly style: MotionStyle
   private readonly drift: { stride: Drift; arms: Drift; pace: Drift; lean: Drift; sway: Drift; head: Drift }
   private readonly fidgets = new FidgetPicker()
+  /** gets a loaded model ready to draw before it goes into the scene (main.ts sets it, see prepare.ts) */
+  prepare?: (root: THREE.Object3D) => Promise<void>
   /** motion clips (clips.ts), once both the library and the model have loaded */
   private motions?: MotionLibrary
   private clips?: ClipPlayer
@@ -168,6 +170,8 @@ export class Avatar {
     VRMUtils.rotateVRM0(vrm) // make VRM0 models face +Z like VRM1
     vrm.scene.traverse(o => { o.frustumCulled = false; (o as THREE.Mesh).castShadow = true })
     hideRoboParts(vrm.scene)
+    // smaller textures, shaders and uploads done before it shows, so it appears without a freeze (prepare.ts)
+    await this.prepare?.(vrm.scene)
 
     if (this.vrm) { this.inner.remove(this.vrm.scene); VRMUtils.deepDispose(this.vrm.scene) }
     this.vrm = vrm
