@@ -195,16 +195,19 @@ namespace AiWorld.EditorTools
             var capRoot = new GameObject("Mattress Capsules");
             capRoot.transform.SetParent(bed.transform, false);
             capRoot.layer = MovableLayer;
-            foreach (float off in new[] { -0.36f, -0.12f, 0.12f, 0.36f })
+            // wide, overlapping capsules make a nearly flat top (2 cm dips), so the cloth does not sink into the mattress;
+            // thin ones along the long edges cover its rounded top corners
+            var capSpecs = new (float off, float r)[] { (-0.36f, 0.2f), (-0.18f, 0.2f), (0f, 0.2f), (0.18f, 0.2f), (0.36f, 0.2f), (-0.42f, 0.1f), (0.42f, 0.1f) };
+            foreach (var (off, capR) in capSpecs)
             {
                 var g = new GameObject("Capsule");
                 g.transform.SetParent(capRoot.transform, false);
-                g.transform.position = at + right * off + Vector3.up * (parts.mattressTop - 0.12f + 0.012f);
+                g.transform.position = at + right * off + Vector3.up * (parts.mattressTop - capR + (capR < 0.15f ? 0.03f : 0.02f));
                 g.transform.rotation = Quaternion.LookRotation(headTo);
                 g.layer = MovableLayer;
                 var c = g.AddComponent<CapsuleCollider>();
                 c.direction = 2;
-                c.radius = 0.12f;
+                c.radius = capR;
                 c.height = 2.0f;
                 c.isTrigger = true;    // for the cloth only
                 caps.Add(c);
@@ -277,8 +280,9 @@ namespace AiWorld.EditorTools
             var b = src.gameObject.AddComponent<SoftBlanket>();
             b.edge = edge;
             // held up and back past the foot end, so the blanket hangs clear of the mattress while someone gets in or out
-            b.foldedOffset = rootBone.InverseTransformDirection(-headTo) * 1.6f + rootBone.InverseTransformDirection(Vector3.up) * 1.0f;
-            b.coverOffset = rootBone.InverseTransformDirection(-headTo) * 0.42f + rootBone.InverseTransformDirection(Vector3.up) * 0.24f;
+            // (the blanket is 1.75 m long: from 1.8 m up and past the foot end, all of it hangs clear of the mattress)
+            b.foldedOffset = rootBone.InverseTransformDirection(-headTo) * 2.0f + rootBone.InverseTransformDirection(Vector3.up) * 1.8f;
+            b.coverOffset = rootBone.InverseTransformDirection(-headTo) * 0.3f + rootBone.InverseTransformDirection(Vector3.up) * 0.28f;
             src.gameObject.layer = MovableLayer;
             return b;
         }
@@ -287,8 +291,9 @@ namespace AiWorld.EditorTools
         {
             // the desk's back (its rail) against the back wall; the chair in front, facing it
             var desk = Place("Desk", at, Vector3.back, parent, backPart: "Desk.Rail");
-            var seatAt = at + Vector3.back * 0.72f;
-            var chair = Place("Chair", seatAt, Vector3.forward, parent, backPart: "Chair.Back");
+            // the chair stands pushed in, its seat partly under the desk top
+            var chairIn = at + Vector3.back * 0.45f;
+            var chair = Place("Chair", chairIn, Vector3.forward, parent, backPart: "Chair.Back");
             var laptop = Place("Laptop", at + Vector3.back * 0.1f + Vector3.up * 0.74f, Vector3.back, parent, backPart: "Laptop.Hinge.Lid.X");
             laptop.transform.SetParent(desk.transform, true);
             chair.transform.SetParent(desk.transform, true);
@@ -316,12 +321,53 @@ namespace AiWorld.EditorTools
             parts.lidEdge = edge;
 
             parts.seatTop = 0.49f;
-            parts.seat = Point(desk, "Seat", seatAt + Vector3.forward * 0.02f, Vector3.forward);
-            parts.front = Point(desk, "Front", seatAt + Vector3.left * 0.55f, Vector3.forward);
+            parts.chair = MakeSlidingChair(chair, chairIn);
+            var chairOut = chairIn + Vector3.back * parts.chair.outDistance;
+            var grip = parts.chair.GripCentre;
+            parts.behind = Point(desk, "Behind Chair", grip + Vector3.back * 0.38f, Vector3.forward);
+            parts.side = Point(desk, "Beside Chair", new Vector3(at.x + 0.62f, 0, chairOut.z + 0.3f), Vector3.forward);
+            parts.stepIn = Point(desk, "Step In", new Vector3(at.x, 0, chairOut.z + 0.42f), Vector3.forward);
             var it = Interact(desk, "desk", "desk",
                 new Affordance { verb = "use_computer", minutes = 50, pose = World.Pose.Sit, fun = 25, knowledge = 35, energy = -5 });
-            it.approach = parts.front;
+            it.approach = parts.behind;
             return desk;
+        }
+
+        /// <summary>a chair that slides out from the table and back: a kinematic body that carves the NavMesh</summary>
+        static SlidingChair MakeSlidingChair(GameObject chair, Vector3 at)
+        {
+            foreach (var t in chair.GetComponentsInChildren<Transform>())
+            {
+                t.gameObject.isStatic = false;
+                t.gameObject.layer = MovableLayer;     // left out of the NavMesh bake; it carves instead
+            }
+            foreach (var mc in chair.GetComponentsInChildren<MeshCollider>()) mc.convex = true;
+            chair.AddComponent<Rigidbody>().isKinematic = true;
+            var lb = LocalBounds(chair.transform);
+            var obs = chair.AddComponent<NavMeshObstacle>();
+            obs.shape = NavMeshObstacleShape.Box;
+            obs.center = lb.center;
+            obs.size = lb.size;
+            obs.carving = true;
+            obs.carveOnlyStationary = true;
+            obs.carvingTimeToStationary = 0.2f;
+
+            var sc = chair.AddComponent<SlidingChair>();
+            sc.inPosition = at;
+            sc.outDirection = Vector3.back;
+            sc.outDistance = 0.55f;
+            var back = Bounds(Find(chair, "Chair.Back"));
+            var top = new Vector3(back.center.x, back.max.y - 0.03f, back.center.z);
+            sc.gripLeft = new GameObject("Grip Left").transform;
+            sc.gripLeft.SetParent(chair.transform, false);
+            sc.gripLeft.position = top + Vector3.left * 0.15f;
+            sc.gripRight = new GameObject("Grip Right").transform;
+            sc.gripRight.SetParent(chair.transform, false);
+            sc.gripRight.position = top + Vector3.right * 0.15f;
+            sc.seat = new GameObject("Seat").transform;
+            sc.seat.SetParent(chair.transform, false);
+            sc.seat.SetPositionAndRotation(new Vector3(at.x, 0, at.z), Quaternion.LookRotation(Vector3.forward));
+            return sc;
         }
 
         static GameObject MakeFridge(Vector3 at, Transform parent)

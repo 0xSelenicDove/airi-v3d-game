@@ -172,11 +172,11 @@ namespace AiWorld.Agents
             if (!TryGetComponent(out Rigidbody rb)) rb = gameObject.AddComponent<Rigidbody>();
             rb.isKinematic = true;
             var list = new List<CapsuleCollider>();
-            void Seg(HumanBodyBones a, HumanBodyBones b, float r)
+            bool Seg(HumanBodyBones a, HumanBodyBones b, float r)
             {
                 var ta = anim.GetBoneTransform(a);
                 var tb = anim.GetBoneTransform(b);
-                if (!ta || !tb) return;
+                if (!ta || !tb) return false;
                 var c = ta.gameObject.AddComponent<CapsuleCollider>();
                 var local = ta.InverseTransformPoint(tb.position);
                 c.direction = Mathf.Abs(local.x) > Mathf.Abs(local.y) ? (Mathf.Abs(local.x) > Mathf.Abs(local.z) ? 0 : 2)
@@ -185,13 +185,32 @@ namespace AiWorld.Agents
                 c.height = local.magnitude + r * 2f;
                 c.radius = r;
                 list.Add(c);
+                return true;
+            }
+            // a foot without a toe bone: a capsule 12 cm forward from the ankle
+            void Tip(HumanBodyBones a, float r)
+            {
+                var ta = anim.GetBoneTransform(a);
+                if (!ta) return;
+                var c = ta.gameObject.AddComponent<CapsuleCollider>();
+                var local = ta.InverseTransformDirection(transform.forward) * 0.12f;
+                c.direction = Mathf.Abs(local.x) > Mathf.Abs(local.y) ? (Mathf.Abs(local.x) > Mathf.Abs(local.z) ? 0 : 2)
+                                                                      : (Mathf.Abs(local.y) > Mathf.Abs(local.z) ? 1 : 2);
+                c.center = local * 0.5f;
+                c.height = 0.12f + r * 2f;
+                c.radius = r;
+                list.Add(c);
             }
             float s = Height / 1.6f;
             Seg(HumanBodyBones.Hips, HumanBodyBones.Neck, 0.13f * s);
-            Seg(HumanBodyBones.LeftUpperLeg, HumanBodyBones.LeftLowerLeg, 0.07f * s);
-            Seg(HumanBodyBones.RightUpperLeg, HumanBodyBones.RightLowerLeg, 0.07f * s);
-            Seg(HumanBodyBones.LeftLowerLeg, HumanBodyBones.LeftFoot, 0.055f * s);
-            Seg(HumanBodyBones.RightLowerLeg, HumanBodyBones.RightFoot, 0.055f * s);
+            // a little fuller than the body: the blanket is cloth whose triangles span ~6 cm, so it needs some margin
+            Seg(HumanBodyBones.LeftUpperLeg, HumanBodyBones.LeftLowerLeg, 0.085f * s);
+            Seg(HumanBodyBones.RightUpperLeg, HumanBodyBones.RightLowerLeg, 0.085f * s);
+            Seg(HumanBodyBones.LeftLowerLeg, HumanBodyBones.LeftFoot, 0.07f * s);
+            Seg(HumanBodyBones.RightLowerLeg, HumanBodyBones.RightFoot, 0.07f * s);
+            // the feet stick up when lying on the back
+            if (!Seg(HumanBodyBones.LeftFoot, HumanBodyBones.LeftToes, 0.065f * s)) Tip(HumanBodyBones.LeftFoot, 0.065f * s);
+            if (!Seg(HumanBodyBones.RightFoot, HumanBodyBones.RightToes, 0.065f * s)) Tip(HumanBodyBones.RightFoot, 0.065f * s);
             BodyCapsules = list.ToArray();
         }
     }

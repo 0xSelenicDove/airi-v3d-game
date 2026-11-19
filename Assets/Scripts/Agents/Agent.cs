@@ -211,12 +211,13 @@ namespace AiWorld.Agents
         {
             if (on)
             {
-                nav.ResetPath();
+                if (nav.enabled && nav.isOnNavMesh) nav.ResetPath();
                 nav.updatePosition = false;
                 nav.updateRotation = false;
             }
             else
             {
+                nav.enabled = true;
                 nav.Warp(transform.position);
                 nav.updatePosition = true;
                 nav.updateRotation = true;
@@ -366,28 +367,41 @@ namespace AiWorld.Agents
             yield return StandUp(bed.side);
         }
 
-        IEnumerator StandUp(Transform to)
+        /// <summary>stand up over the feet; <paramref name="rejoinNav"/> = false where the NavMesh does not reach (beside a desk)</summary>
+        IEnumerator StandUp(Transform to, bool rejoinNav = true)
         {
             rig.Play(AvatarRig.Locomotion, 0.8f);
             rig.HoldHipsAt(null);
             yield return Glide(to, 0.8f);
-            nav.enabled = true;
-            Manual(false);
+            if (rejoinNav) Manual(false);
         }
 
         // ------------------------------------------------------------------ desk
 
         IEnumerator UseComputer(DeskParts desk, Affordance aff)
         {
-            yield return WalkTo(desk.front.position);
+            var chair = desk.chair;
+            var toDesk = Flat(desk.stepIn.forward).normalized;
+
+            // pull the chair out by its backrest, stepping back with it
+            yield return WalkTo(desk.behind.position);
             if (!ok) yield break;
-            Doing = "sitting down";
-            yield return TurnTo(desk.seat.forward, 0.6f);
+            Doing = "pulling the chair out";
+            yield return MoveChair(chair, 1f, toDesk);
+
+            // round the chair, in between it and the desk, and sit down with the calves against the seat
+            yield return NavTo(desk.side.position, 0.1f);
             Manual(true);
+            yield return StepTo(desk.stepIn.position, toDesk);
+            Doing = "sitting down";
             nav.enabled = false;
             rig.Play(AvatarRig.Sit, 0.8f);
             rig.HoldHipsAt(desk.seatTop + 0.07f);
-            yield return Glide(desk.seat, 0.8f);
+            yield return Glide(chair.seat, 0.8f);
+            // and slide in to the desk with the chair
+            chair.Slide(0f, 0.35f);
+            while (chair.Moving) { transform.position = chair.seat.position; yield return null; }
+            transform.position = chair.seat.position;
 
             // open the lid with the right hand
             rig.Reach(AvatarIKGoal.RightHand, desk.lidEdge);
@@ -408,7 +422,60 @@ namespace AiWorld.Agents
             while (!desk.lid.IsClosed) yield return null;
             rig.LetGo(AvatarIKGoal.RightHand);
             rig.LookAt(null);
-            yield return StandUp(desk.front);
+
+            // slide out with the chair, stand up over the feet, step out and push the chair back in
+            Doing = "getting up";
+            chair.Slide(1f, 0.35f);
+            while (chair.Moving) { transform.position = chair.seat.position; yield return null; }
+            yield return StandUp(desk.stepIn, rejoinNav: false);
+            Manual(true);
+            yield return StepTo(desk.side.position, -Flat(desk.side.position - desk.stepIn.position));
+            Manual(false);
+            yield return NavTo(chair.GripCentre - toDesk * 0.38f, 0.1f);
+            Doing = "pushing the chair in";
+            yield return MoveChair(chair, 0f, toDesk);
+            Manual(true);
+            yield return StepTo(transform.position - toDesk * 0.25f, toDesk);
+            Manual(false);
+        }
+
+        /// <summary>both hands on the backrest, then walk with the chair as it slides in or out</summary>
+        IEnumerator MoveChair(SlidingChair chair, float to, Vector3 toDesk)
+        {
+            yield return TurnTo(toDesk, 0.4f);
+            rig.Reach(AvatarIKGoal.LeftHand, chair.gripLeft);
+            rig.Reach(AvatarIKGoal.RightHand, chair.gripRight);
+            rig.LookAt(chair.GripCentre);
+            float wait = 0;
+            while (!rig.HandArrived(AvatarIKGoal.RightHand) && (wait += Time.deltaTime) < 1.5f) yield return null;
+            Manual(true);
+            chair.Slide(to);
+            while (chair.Moving)
+            {
+                var want = chair.GripCentre - toDesk * 0.38f;
+                want.y = 0;
+                transform.position = Vector3.MoveTowards(transform.position, want, 1.2f * Time.deltaTime);
+                yield return null;
+            }
+            rig.LetGo(AvatarIKGoal.LeftHand);
+            rig.LetGo(AvatarIKGoal.RightHand);
+            rig.LookAt(null);
+            yield return new WaitForSeconds(0.3f);
+            Manual(false);
+        }
+
+        /// <summary>walk a short way by hand (where the NavMesh is too tight, e.g. between a chair and a desk)</summary>
+        IEnumerator StepTo(Vector3 p, Vector3 face, float speed = 0.55f)
+        {
+            p.y = transform.position.y;
+            var look = Flat(face).sqrMagnitude > 1e-4f ? Quaternion.LookRotation(Flat(face).normalized) : transform.rotation;
+            while (Flat(transform.position - p).magnitude > 0.01f)
+            {
+                transform.position = Vector3.MoveTowards(transform.position, p, speed * Time.deltaTime);
+                transform.rotation = Quaternion.Slerp(transform.rotation, look, Time.deltaTime * 5f);
+                yield return null;
+            }
+            transform.rotation = look;
         }
 
         // ------------------------------------------------------------------ fridge

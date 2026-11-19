@@ -99,8 +99,7 @@ From the web version (see git history up to `157b50f`):
 ## Known limitations
 
 - Generated clips are stiff compared with motion capture (see above).
-- Characters slide sideways onto the desk chair; the chair does not move yet.
-- The blanket is simulated against capsules: feet can poke through it, and it can bunch up on one side.
+- The blanket collides with capsules round the body, not with the clothes: very wide sleeves or skirts can show through it.
 - CI checks only the Node bridge: building the Unity project in CI needs a Unity license set up as a secret.
 
 ## Inspiration

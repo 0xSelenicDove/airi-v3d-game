@@ -224,8 +224,9 @@ def bed():
     # blanket: a subdivided sheet lying on the mattress, overhanging the sides; Unity simulates it as cloth
     me = bpy.data.meshes.new('Bed.Soft.Blanket')
     bm = bmesh.new()
-    bmesh.ops.create_grid(bm, x_segments=18, y_segments=24, size=0.5)
-    bmesh.ops.scale(bm, vec=Vector((W + 0.3, 1.45, 1)), verts=bm.verts)
+    bmesh.ops.create_grid(bm, x_segments=18, y_segments=29, size=0.5)
+    # 1.75 m long: enough to lie over a body from the chest and still cover the feet
+    bmesh.ops.scale(bm, vec=Vector((W + 0.3, 1.75, 1)), verts=bm.verts)
     bm.to_mesh(me)
     bm.free()
     for p in me.polygons:
@@ -233,7 +234,7 @@ def bed():
     bl = bpy.data.objects.new('Bed.Soft.Blanket', me)
     bpy.context.scene.collection.objects.link(bl)
     me.materials.append(blanket_m)
-    bl.location = (0, -0.25, 0.535)
+    bl.location = (0, -0.4, 0.535)
     bl.parent = root   # one sheet of vertices (no thickness): cloth needs a single layer; Unity draws it double-sided
     export('Bed')
 
