@@ -49,6 +49,8 @@ public/model2.vrm   # 第二个 AI（Luna）
 
 没有模型时，游戏会使用 [`public/models/avatars`](public/models/avatars) 里两个来自 VRM 官方示例的公开形象：Luna 用 **Seed-san model by VirtualCast, Inc.**，Airi 用 pixiv Inc. 的 VRM1_Constraint_Twist_Sample。两者都采用 [VRM Public License 1.0](https://vrm.dev/licenses/1.0/)。模型加载完成前，AI 会显示为彩色胶囊体。你也可以把 `.vrm` 文件直接拖到页面上：拖到屏幕左半边会替换第一个 AI 的模型，右半边则替换第二个。
 
+加载模型时，超过 1024 像素的贴图会缩小到 1024 像素（[`src/prepare.ts`](src/prepare.ts) 里的 `MAX_TEXTURE`）。VRoid 导出的模型常带 4096 像素的贴图，每个角色约占 1.5 GB 显存，而在这个镜头距离下看起来没有区别。着色器编译和贴图上传会在模型出现之前完成，所以模型出现时游戏不会卡住。
+
 ## 操作
 
 | 输入 | 作用 |
