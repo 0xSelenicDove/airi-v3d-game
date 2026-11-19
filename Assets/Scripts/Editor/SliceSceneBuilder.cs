@@ -212,6 +212,22 @@ namespace AiWorld.EditorTools
                 c.isTrigger = true;    // for the cloth only
                 caps.Add(c);
             }
+            // the wall beside the bed, as far as the cloth is concerned (walls are not cloth colliders): a fat capsule
+            // whose surface is the wall's face, so the blanket bunches against the wall instead of hanging through it
+            {
+                const float wr = 0.4f;
+                var g = new GameObject("Wall Stop");
+                g.transform.SetParent(capRoot.transform, false);
+                g.transform.position = at - side * (0.505f + wr + 0.02f) + Vector3.up * parts.mattressTop;
+                g.transform.rotation = Quaternion.LookRotation(headTo);
+                g.layer = MovableLayer;
+                var c = g.AddComponent<CapsuleCollider>();
+                c.direction = 2;
+                c.radius = wr;
+                c.height = 2.4f;
+                c.isTrigger = true;
+                caps.Add(c);
+            }
             parts.mattress = caps.ToArray();
             parts.blanket = MakeBlanket(bed, headTo, parts.mattress);
             return bed;
@@ -280,9 +296,10 @@ namespace AiWorld.EditorTools
             var b = src.gameObject.AddComponent<SoftBlanket>();
             b.edge = edge;
             // held up and back past the foot end, so the blanket hangs clear of the mattress while someone gets in or out
-            // (the blanket is 1.75 m long: from 1.8 m up and past the foot end, all of it hangs clear of the mattress)
-            b.foldedOffset = rootBone.InverseTransformDirection(-headTo) * 2.0f + rootBone.InverseTransformDirection(Vector3.up) * 1.8f;
-            b.coverOffset = rootBone.InverseTransformDirection(-headTo) * 0.3f + rootBone.InverseTransformDirection(Vector3.up) * 0.28f;
+            // (the blanket is 1.75 m long and stretches a little: held 2.7 m up over the feet, it hangs clear above the legs)
+            b.foldedOffset = rootBone.InverseTransformDirection(-headTo) * 1.5f + rootBone.InverseTransformDirection(Vector3.up) * 2.7f;
+            b.overFeet = rootBone.InverseTransformDirection(-headTo) * 1.5f + rootBone.InverseTransformDirection(Vector3.up) * 1.95f;
+            b.coverOffset = rootBone.InverseTransformDirection(-headTo) * 0.18f + rootBone.InverseTransformDirection(Vector3.up) * 0.2f;   // on the upper chest
             src.gameObject.layer = MovableLayer;
             return b;
         }

@@ -105,7 +105,7 @@ namespace AiWorld.Agents
         {
             Thought = text;
             thoughtUntil = Time.time + seconds;
-            Debug.Log($"[{displayName}] ({text})");
+            Debug.Log($"[{displayName}] {(GameClock.Instance ? GameClock.Instance.Clock : "")} ({text})");
         }
 
         // ------------------------------------------------------------------ the day
@@ -336,7 +336,8 @@ namespace AiWorld.Agents
             yield return Glide(bed.sit, 0.9f);
             yield return new WaitForSeconds(0.4f);
 
-            // fold the blanket back with the hand nearest the pillow
+            // fold the blanket back with the hand nearest the pillow (from now on the blanket knows where the body is)
+            bed.blanket.SetBodyColliders(rig.ClothCapsules, bed.mattress);
             rig.Reach(AvatarIKGoal.LeftHand, bed.blanket.edge);
             yield return new WaitForSeconds(0.5f);
             bed.blanket.Fold(1f);
@@ -348,11 +349,13 @@ namespace AiWorld.Agents
             rig.Play(AvatarRig.Lie, 1.8f);
             rig.HoldHipsAt(bed.mattressTop + 0.1f);
             yield return Glide(bed.lie, 1.8f);
-            bed.blanket.SetBodyColliders(rig.BodyCapsules, bed.mattress);
+            bed.blanket.SetBodyColliders(rig.ClothCapsules, bed.mattress);
             bed.blanket.Cover(true);
             bed.blanket.Fold(0f);
             Asleep = true;
+            // sleep through the night: once the time is up, sleep on until morning (unless asked to get up)
             yield return Activity(aff);
+            while (!cutShort && IsNight()) yield return null;   // still sleeping (and resting): Doing stays "sleep"
             Asleep = false;
 
             Doing = "getting up";
@@ -533,6 +536,12 @@ namespace AiWorld.Agents
                 yield return new WaitForSeconds(Random.Range(2f, 4f));
             }
             rig.LookAt(null);
+        }
+
+        static bool IsNight()
+        {
+            float h = GameClock.Instance ? GameClock.Instance.Hour : 12f;
+            return h >= 22f || h < 6.5f;
         }
 
         static Vector3 Flat(Vector3 v) => new(v.x, 0, v.z);

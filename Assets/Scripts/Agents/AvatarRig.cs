@@ -34,6 +34,12 @@ namespace AiWorld.Agents
         public Animator Animator => anim;
         public float Height { get; private set; } = 1.6f;
         public CapsuleCollider[] BodyCapsules { get; private set; } = new CapsuleCollider[0];
+        /// <summary>
+        /// fat capsules for cloth only (a blanket): one round both legs and one round the torso. Cloth collides at its
+        /// vertices (~6 cm apart), so it slips round thin limb capsules; these are wide enough to hold it up.
+        /// </summary>
+        public CapsuleCollider[] ClothCapsules { get; private set; } = new CapsuleCollider[0];
+        (CapsuleCollider c, HumanBodyBones a1, HumanBodyBones a2, HumanBodyBones b1, HumanBodyBones b2, float extend)[] proxies;
         public string State => state;
 
         class HandIk
@@ -60,6 +66,48 @@ namespace AiWorld.Agents
                 vrm.LookAtTarget = eyeTarget;
             }
             BuildCapsules();
+            BuildClothProxies();
+        }
+
+        void BuildClothProxies()
+        {
+            float s = Height / 1.6f;
+            CapsuleCollider Make(string name, float r)
+            {
+                var g = new GameObject(name);
+                g.transform.SetParent(transform, false);
+                g.layer = gameObject.layer;
+                var c = g.AddComponent<CapsuleCollider>();
+                c.isTrigger = true;     // for cloth only: no physics with doors or furniture
+                c.direction = 2;
+                c.radius = r;
+                return c;
+            }
+            proxies = new[]
+            {
+                (Make("Cloth Legs", 0.15f * s), HumanBodyBones.LeftUpperLeg, HumanBodyBones.RightUpperLeg, HumanBodyBones.LeftFoot, HumanBodyBones.RightFoot, 0.12f * s),
+                (Make("Cloth Torso", 0.17f * s), HumanBodyBones.Hips, HumanBodyBones.Hips, HumanBodyBones.Neck, HumanBodyBones.Neck, 0f),
+            };
+            ClothCapsules = new[] { proxies[0].c, proxies[1].c };
+            UpdateClothProxies();
+        }
+
+        void UpdateClothProxies()
+        {
+            if (proxies == null) return;
+            foreach (var (c, a1, a2, b1, b2, extend) in proxies)
+            {
+                var ta1 = anim.GetBoneTransform(a1); var ta2 = anim.GetBoneTransform(a2);
+                var tb1 = anim.GetBoneTransform(b1); var tb2 = anim.GetBoneTransform(b2);
+                if (!ta1 || !ta2 || !tb1 || !tb2) { c.enabled = false; continue; }
+                var a = (ta1.position + ta2.position) * 0.5f;
+                var b = (tb1.position + tb2.position) * 0.5f;
+                var d = b - a;
+                if (d.sqrMagnitude < 1e-6f) continue;
+                b += d.normalized * extend;   // past the ankles, over the feet
+                c.transform.SetPositionAndRotation((a + b) * 0.5f, Quaternion.LookRotation(b - a));
+                c.height = (b - a).magnitude + c.radius * 2f;
+            }
         }
 
         /// <summary>blend into a body state over <paramref name="seconds"/></summary>
@@ -148,6 +196,7 @@ namespace AiWorld.Agents
             var p = transform.localPosition;
             p.y = hipsOffset;
             transform.localPosition = p;
+            UpdateClothProxies();
         }
 
         void Blink()
