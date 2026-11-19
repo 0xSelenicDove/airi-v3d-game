@@ -21,6 +21,8 @@ import type { Step } from './index'
 const CALVES = 0.12
 /** standing up, the body's centre is at least this far in front of where the hips are on the seat */
 const STAND_OFF = 0.27
+/** clear floor in front of a seat is looked for up to this far from it; further away, one would sit down from afar */
+const FRONT_SEARCH = 0.6
 /** how far a chair at a table slides out, so that one can stand between it and the table */
 export const PULL = 0.45
 /** how far the body moves over the feet while sitting down or standing up (at a table, or on a bed's edge) */
@@ -42,15 +44,20 @@ export function chairTop(world: World, c: TableChair, by: Vec2): Vec3 {
   return { x: at.x, y: c.top - 0.02, z: at.z }
 }
 
-/** where one stands just in front of the seat, on the line from the seat to its approach point */
+/**
+ * where one stands just in front of the seat, on the line from the seat to its approach point. A seat inside
+ * something one steps into (the bench of the rowboat, between its sides) has no clear floor in front: there, one
+ * stands right in front of it, inside, rather than back where the way in starts.
+ */
 export function seatFront(world: World, obj: WorldObject): Vec2 {
   const to = obj.approach ?? obj.usePos
   const len = dist(obj.usePos, to)
   if (len < 1e-3) return { ...to }
   const dx = (to.x - obj.usePos.x) / len, dz = (to.z - obj.usePos.z) / len
+  const far = Math.min(len, FRONT_SEARCH)
   let r = STAND_OFF
-  while (r < len && world.clearance({ x: obj.usePos.x + dx * r, z: obj.usePos.z + dz * r }) < CALVES) r += 0.02
-  r = Math.min(r, len)
+  while (r < far && world.clearance({ x: obj.usePos.x + dx * r, z: obj.usePos.z + dz * r }) < CALVES) r += 0.02
+  r = r < far ? r : Math.min(STAND_OFF, len)
   return { x: obj.usePos.x + dx * r, z: obj.usePos.z + dz * r }
 }
 
