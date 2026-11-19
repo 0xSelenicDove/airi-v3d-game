@@ -11,7 +11,7 @@ namespace AiWorld.World
     ///  * folding: the edge is held (0) and the rest hangs free;
     ///  * over a sleeper: only the middle of the edge is held, resting on the chest, so the blanket cannot slide off the
     ///    rounded body; the corners of the edge are let go and drape down instead of floating in the air; and the whole
-    ///    sheet is kept within ~35 cm of where it lay, so it does not slide off or wander during a night of simulation;
+    ///    sheet is kept within ~40 cm of where it lay (enough to rise over the fitted body), so it does not slide off or wander during a night of simulation;
     ///  * on an empty bed: held loosely flat.
     /// The limits change gradually (a sudden limit snaps vertices back), and the edge is taken up again smoothly.
     /// </summary>
@@ -30,7 +30,7 @@ namespace AiWorld.World
 
         [Header("How far vertices may move from the skinned pose (m)")]
         public float hangFree = 2.5f;
-        public float overSleeper = 0.35f, overSleeperCorners = 0.3f;
+        public float overSleeper = 0.4f, overSleeperCorners = 0.35f;
         [Tooltip("over a sleeper, the edge is held only this far either side of its middle (m)")]
         public float heldHalfWidth = 0.2f;
         public float onEmptyBed = 0.25f;
@@ -84,6 +84,14 @@ namespace AiWorld.World
 
         /// <summary>0 = covering the bed, 1 = folded back to the foot end</summary>
         public void Fold(float amount) => foldTarget = Mathf.Clamp01(amount);
+
+        /// <summary>rest the held edge just on top of a sleeper's chest at this world height (their outfit decides it)</summary>
+        public void CoverAt(float chestTopWorldY)
+        {
+            var parent = edge.parent;
+            float now = parent.TransformPoint(restLocal + coverOffset).y;
+            coverOffset += parent.InverseTransformVector(Vector3.up * (chestTopWorldY + 0.02f - now));
+        }
 
         /// <summary>someone lies in the bed: the edge comes down over their chest, not through them to the mattress</summary>
         public void Cover(bool sleeper) => coverTarget = sleeper ? 1f : 0f;

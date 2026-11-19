@@ -35,11 +35,21 @@ namespace AiWorld.Agents
         public float Height { get; private set; } = 1.6f;
         public CapsuleCollider[] BodyCapsules { get; private set; } = new CapsuleCollider[0];
         /// <summary>
-        /// fat capsules for cloth only (a blanket): one round both legs and one round the torso. Cloth collides at its
-        /// vertices (~6 cm apart), so it slips round thin limb capsules; these are wide enough to hold it up.
+        /// fat capsules for cloth only (a blanket): round both legs, round the torso, and round each arm. Cloth collides
+        /// at its vertices (~6 cm apart), so it slips round thin limb capsules, and the clothes (wide sleeves, skirts)
+        /// stick out further than the body. <see cref="FitClothCapsules"/> sizes them to the outfit as it lies.
         /// </summary>
         public CapsuleCollider[] ClothCapsules { get; private set; } = new CapsuleCollider[0];
-        (CapsuleCollider c, HumanBodyBones a1, HumanBodyBones a2, HumanBodyBones b1, HumanBodyBones b2, float extend)[] proxies;
+        ClothProxy[] proxies;
+
+        class ClothProxy
+        {
+            public CapsuleCollider c;
+            public HumanBodyBones a1, a2, b1, b2;
+            public float extend, minRadius;
+            public bool trimStart, trimEnd;   // pull that rounded end in by the radius, so it stops at the bone (chest, shoulder)
+            public Vector3 A, B;   // the axis, last update
+        }
         public string State => state;
 
         class HandIk
@@ -71,8 +81,8 @@ namespace AiWorld.Agents
 
         void BuildClothProxies()
         {
-            float s = Height / 1.6f;
-            CapsuleCollider Make(string name, float r)
+            float sc = Height / 1.6f;
+            ClothProxy Make(string name, float r, HumanBodyBones a1, HumanBodyBones a2, HumanBodyBones b1, HumanBodyBones b2, float extend, bool trimStart = false, bool trimEnd = false)
             {
                 var g = new GameObject(name);
                 g.transform.SetParent(transform, false);
@@ -81,33 +91,106 @@ namespace AiWorld.Agents
                 c.isTrigger = true;     // for cloth only: no physics with doors or furniture
                 c.direction = 2;
                 c.radius = r;
-                return c;
+                return new ClothProxy { c = c, a1 = a1, a2 = a2, b1 = b1, b2 = b2, extend = extend, minRadius = r, trimStart = trimStart, trimEnd = trimEnd };
             }
             proxies = new[]
             {
-                (Make("Cloth Legs", 0.15f * s), HumanBodyBones.LeftUpperLeg, HumanBodyBones.RightUpperLeg, HumanBodyBones.LeftFoot, HumanBodyBones.RightFoot, 0.12f * s),
-                (Make("Cloth Torso", 0.17f * s), HumanBodyBones.Hips, HumanBodyBones.Hips, HumanBodyBones.Neck, HumanBodyBones.Neck, 0f),
+                Make("Cloth Legs", 0.15f * sc, HumanBodyBones.LeftUpperLeg, HumanBodyBones.RightUpperLeg, HumanBodyBones.LeftFoot, HumanBodyBones.RightFoot, 0.12f * sc),
+                // the torso ends at the neck with its round end pulled in, so it never reaches round the head
+                Make("Cloth Torso", 0.17f * sc, HumanBodyBones.Hips, HumanBodyBones.Hips, HumanBodyBones.Neck, HumanBodyBones.Neck, 0f, trimEnd: true),
+                Make("Cloth Left Arm", 0.06f * sc, HumanBodyBones.LeftUpperArm, HumanBodyBones.LeftUpperArm, HumanBodyBones.LeftHand, HumanBodyBones.LeftHand, 0.08f * sc, trimStart: true),
+                Make("Cloth Right Arm", 0.06f * sc, HumanBodyBones.RightUpperArm, HumanBodyBones.RightUpperArm, HumanBodyBones.RightHand, HumanBodyBones.RightHand, 0.08f * sc, trimStart: true),
             };
-            ClothCapsules = new[] { proxies[0].c, proxies[1].c };
+            ClothCapsules = System.Array.ConvertAll(proxies, x => x.c);
             UpdateClothProxies();
         }
 
         void UpdateClothProxies()
         {
             if (proxies == null) return;
-            foreach (var (c, a1, a2, b1, b2, extend) in proxies)
+            foreach (var x in proxies)
             {
-                var ta1 = anim.GetBoneTransform(a1); var ta2 = anim.GetBoneTransform(a2);
-                var tb1 = anim.GetBoneTransform(b1); var tb2 = anim.GetBoneTransform(b2);
-                if (!ta1 || !ta2 || !tb1 || !tb2) { c.enabled = false; continue; }
+                var ta1 = anim.GetBoneTransform(x.a1); var ta2 = anim.GetBoneTransform(x.a2);
+                var tb1 = anim.GetBoneTransform(x.b1); var tb2 = anim.GetBoneTransform(x.b2);
+                if (!ta1 || !ta2 || !tb1 || !tb2) { x.c.enabled = false; continue; }
                 var a = (ta1.position + ta2.position) * 0.5f;
                 var b = (tb1.position + tb2.position) * 0.5f;
                 var d = b - a;
                 if (d.sqrMagnitude < 1e-6f) continue;
-                b += d.normalized * extend;   // past the ankles, over the feet
-                c.transform.SetPositionAndRotation((a + b) * 0.5f, Quaternion.LookRotation(b - a));
-                c.height = (b - a).magnitude + c.radius * 2f;
+                b += d.normalized * x.extend;   // past the ankles over the feet, past the wrists over the hands
+                float len = (b - a).magnitude, r = x.c.radius;
+                var dir = (b - a) / len;
+                if (x.trimEnd) b -= dir * Mathf.Min(r, len * 0.45f);
+                if (x.trimStart) a += dir * Mathf.Min(r, len * 0.45f);
+                x.A = a;
+                x.B = b;
+                x.c.transform.SetPositionAndRotation((a + b) * 0.5f, Quaternion.LookRotation(b - a));
+                x.c.height = (b - a).magnitude + x.c.radius * 2f;
             }
+        }
+
+        /// <summary>
+        /// size the cloth capsules to the outfit in the pose it is in now (call it once lying down): every vertex of
+        /// the avatar's meshes goes to the nearest capsule axis, and each capsule grows to enclose 99% of the
+        /// upper half of its vertices (the half the blanket rests on; hair spread under the body does not count).
+        /// Returns the world height of the top of the chest.
+        /// </summary>
+        public float FitClothCapsules(float maxRadius = 0.28f)
+        {
+            UpdateClothProxies();
+            var dists = new List<float>[proxies.Length];
+            for (int i = 0; i < proxies.Length; i++) dists[i] = new List<float>();
+            var baked = new Mesh();
+            var head = anim.GetBoneTransform(HumanBodyBones.Head);
+            foreach (var smr in GetComponentsInChildren<SkinnedMeshRenderer>())
+            {
+                if (!smr.enabled || !smr.sharedMesh) continue;
+                smr.BakeMesh(baked, true);
+                var m = Matrix4x4.TRS(smr.transform.position, smr.transform.rotation, Vector3.one);
+                var verts = baked.vertices;
+                for (int v = 0; v < verts.Length; v += 2)        // every other vertex is plenty
+                {
+                    var w = m.MultiplyPoint3x4(verts[v]);
+                    if (head && (w - head.position).sqrMagnitude < 0.03f) continue;   // the head and face stay uncovered
+                    int best = -1;
+                    float bestD = float.MaxValue, bestAxisY = 0;
+                    for (int i = 0; i < proxies.Length; i++)
+                    {
+                        var x = proxies[i];
+                        if (!x.c.enabled) continue;
+                        var ab = x.B - x.A;
+                        float tRaw = Vector3.Dot(w - x.A, ab) / ab.sqrMagnitude;
+                        float t = Mathf.Clamp01(tRaw);
+                        var onAxis = x.A + ab * t;
+                        float dd = (w - onAxis).sqrMagnitude;
+                        // past the ends (hair spread on the pillow above the head) does not size anything
+                        bool alongside = tRaw > -0.05f && tRaw < 1.05f;
+                        if (dd < bestD) { bestD = dd; best = alongside ? i : -1; bestAxisY = onAxis.y; }
+                    }
+                    if (best >= 0 && w.y >= bestAxisY) dists[best].Add(Mathf.Sqrt(bestD));
+                }
+            }
+            Destroy(baked);
+            for (int i = 0; i < proxies.Length; i++)
+            {
+                var x = proxies[i];
+                float r = x.minRadius;
+                if (dists[i].Count > 20)
+                {
+                    dists[i].Sort();
+                    r = Mathf.Max(r, dists[i][(int)(dists[i].Count * 0.99f)] + 0.015f);
+                }
+                x.c.radius = Mathf.Min(r, maxRadius);
+            }
+            UpdateClothProxies();
+            var torso = proxies[1];
+            return Mathf.Max(torso.A.y, torso.B.y) + torso.c.radius;
+        }
+
+        /// <summary>back to the small sizes (standing up)</summary>
+        public void UnfitClothCapsules()
+        {
+            foreach (var x in proxies) x.c.radius = x.minRadius;
         }
 
         /// <summary>blend into a body state over <paramref name="seconds"/></summary>

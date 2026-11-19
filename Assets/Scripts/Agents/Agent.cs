@@ -350,6 +350,8 @@ namespace AiWorld.Agents
             rig.HoldHipsAt(bed.mattressTop + 0.1f);
             yield return Glide(bed.lie, 1.8f);
             bed.blanket.SetBodyColliders(rig.ClothCapsules, bed.mattress);
+            // size the blanket's view of the body to the outfit as it lies (wide sleeves, skirts), and rest its edge on the chest
+            bed.blanket.CoverAt(rig.FitClothCapsules());
             bed.blanket.Cover(true);
             bed.blanket.Fold(0f);
             Asleep = true;
@@ -365,6 +367,7 @@ namespace AiWorld.Agents
             rig.HoldHipsAt(bed.mattressTop + 0.06f);
             yield return Glide(bed.sit, 1.6f);
             bed.blanket.SetBodyColliders(null, bed.mattress);
+            rig.UnfitClothCapsules();
             bed.blanket.Cover(false);
             bed.blanket.Fold(0f);
             yield return StandUp(bed.side);
