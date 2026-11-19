@@ -18,12 +18,14 @@ Built with TypeScript, [three.js](https://threejs.org/) and [@pixiv/three-vrm](h
 - **Memory** in the style of *Generative Agents*: a memory stream, recall by recency + importance + relevance, periodic reflection into insights, and persistence across reloads (`localStorage`).
 - **Multiple agents**: exclusive furniture (one person per bed/desk), speech that nearby agents actually hear, separate personas and sleep schedules.
 - **Pathfinding**: grid A* around furniture and walls, with a debug overlay.
+- **Behaviour rules** ([`src/skills/RULES.md`](src/skills/RULES.md)), carried out by skills and checked by tests: nothing passes through anything else; shoes come off before lying in bed; people sit on the bedside before lying down; the door is opened by its handle, slowly, and closed again behind them; and when the way is blocked, they stop and think about another route instead of pushing through.
 - **Chance meetings**: agents walk at a relaxed pace, keep their personal space and pass each other on the right. When two meet, they may stop for small talk, wave hello, or walk on.
-- **VRM avatars** with procedural animation: walking, sitting and typing, reading with a book, sleeping, breathing, blinking, talking gestures, looking at nearby agents.
+- **VRM avatars** with procedural animation: walking, sitting and typing, reading with a book, sleeping, breathing, blinking, talking gestures, looking at nearby agents. Each character has a way of walking and standing of its own, with random variation and idle fidgets.
+- **Motion clips** (optional): walking and standing clips made with the Kimodo motion model ([`tools/kimodo`](tools/kimodo/README.md)), played as `.vrma` under the gestures and the hand IK.
 - **Acting**: the LLM (or the mock brain) can make the body do something, such as wave, raise a hand or a leg, nod, bow, clap, point, stretch, cheer or jump, and set the face (happy, sad, angry, surprised, relaxed, shy). It works with any VRM.
 - **World physics** ([Rapier](https://rapier.rs/)): furniture, walls, fences and trees are solid. A gesture plays only if the body has room for it, otherwise the model is told what is in the way. Jumps follow gravity, people push the beach balls around, and hair and clothes rest against nearby backrests, tables and walls.
 - **In-world UI**: name tags, speech bubbles and thought bubbles above each agent.
-- **Camera**: orbit / pan / zoom and a follow mode.
+- **Camera**: orbit / pan / zoom and a follow mode. Moving the camera by hand ends the follow mode. The camera stays at least about 27° above the floor.
 - **Voice**: agents speak aloud with the browser's built-in text-to-speech (a different voice per agent, quieter when far from the camera). It starts after your first click or key press.
 
 ## Quick start
@@ -55,7 +57,7 @@ Without them, the game uses two public sample avatars from the official VRM samp
 | Drag | Rotate the camera |
 | Right-drag | Pan |
 | Scroll | Zoom |
-| `F` | Cycle follow-camera: Airi → Luna → free |
+| `F` | Cycle follow-camera: Airi → Luna → free. Moving the camera by hand ends it. |
 | `R` | Reset the view |
 | `1` / `2` / `3` | Game speed (normal / fast / fastest) |
 | `G` | Toggle the navigation debug overlay (blocked cells and routes) |
@@ -107,6 +109,7 @@ Each agent runs two loops. A **slow loop** asks the brain for the next action on
 | [`src/world.ts`](src/world.ts) | Clock, objects and their affordances (from `src/room-layout.json`), occupancy, speech broadcast, navigation grid and A* |
 | [`src/agent.ts`](src/agent.ts) | Agent state machine, needs, observations, action validation, reflection trigger, walking and avoiding others |
 | [`src/social.ts`](src/social.ts) | Chance meetings: greetings, waves and small talk when two agents meet |
+| [`src/skills/`](src/skills) | Behaviour rules and the skills that carry them out: going to bed, using the door, finding another way |
 | [`src/acting.ts`](src/acting.ts) | Gestures and emotions the agents can act out, and the words and tags the LLM may use for them |
 | [`src/physics.ts`](src/physics.ts) | Rapier world: solid scenery, the agents' bodies, beach balls, and the space checks for gestures |
 | [`src/brain.ts`](src/brain.ts) | `MockBrain`, `LLMBrain`, JSON action parsing |
@@ -152,9 +155,9 @@ Add `--render <dir>` to also save preview images.
 
 - Only memories and the world clock are saved across reloads; positions and needs reset.
 - Relevance in memory recall is keyword overlap, not embeddings.
-- Animation is procedural, so it is stiffer than real motion clips (`.vrma` clip support would be a natural next step).
+- Without clips in `public/motions`, animation is procedural, so it is stiffer than real motion. Clips cover walking and standing only.
 - Small talk in chance meetings uses fixed lines picked for the situation, not the LLM.
-- In a narrow passage, a walker waits up to 4 s for someone who does not move, and then steps past them.
+- Someone who blocks the only way through (a full gate) makes a walker wait and finally give up; nobody is pushed aside.
 - The LLM brain has only been tried with Gemini 2.5 Flash (no thinking) through 302.ai: about 2-3 s per decision, 10 of 11 replies exactly in format and 1 recovered, in a ~100 s run. Other models may need prompt tweaks. Agents also tend to chat repetitively.
 - Hair and clothes rest against the nearest surface in each direction (a plane), so a strongly curved piece of furniture can still be crossed a little.
 - Gestures are procedural poses, not motion captured or generated by a motion model. Agents walk on the navigation grid; physics moves only the balls and checks the space for gestures.

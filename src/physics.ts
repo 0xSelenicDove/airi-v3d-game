@@ -117,6 +117,21 @@ export class Physics implements Space {
     return { point: { x: from.x + d.x * t, y: from.y + d.y * t, z: from.z + d.z * t }, normal: { ...hit.normal }, distance: t }
   }
 
+  private door?: RAPIER_NS.RigidBody
+
+  /** move the door leaf, a thin solid board from its hinge `a` to its free edge `b`, 2 m tall */
+  setDoor(a: { x: number; z: number }, b: { x: number; z: number }) {
+    const R = this.R
+    if (!this.door) {
+      this.door = this.world.createRigidBody(R.RigidBodyDesc.kinematicPositionBased())
+      const len = Math.hypot(b.x - a.x, b.z - a.z)
+      this.world.createCollider(R.ColliderDesc.cuboid(0.025, 1.0, len / 2), this.door)
+    }
+    const yaw = Math.atan2(b.x - a.x, b.z - a.z)
+    this.door.setNextKinematicTranslation({ x: (a.x + b.x) / 2, y: 1.0, z: (a.z + b.z) / 2 })
+    this.door.setNextKinematicRotation({ x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2) })
+  }
+
   isClear(from: Vec3, dir: Vec3, reach: number, ignore?: string) {
     return this.ray(from, dir, reach, ignore) === null
   }

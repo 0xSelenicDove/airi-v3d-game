@@ -1,12 +1,28 @@
-import type { Action, Brain, Needs, Observation, Persona, Vec2, WorldObject, Affordance } from './types'
+import type { Action, Brain, Needs, Observation, Persona, Vec2, Vec3, WorldObject, Affordance } from './types'
 import { World, clamp, dist } from './world'
 import { MemoryStream } from './memory'
 import { GESTURE_INFO, emotionOf, gestureOf, type Emotion, type Gesture } from './acting'
+import type { Pose, SkillMotion, Step } from './skills'
+import { getUp, lieDown } from './skills/bed'
+import { besideDoor, crossesDoor, doorSpots, handle, inSwing, openAt, throughDoor } from './skills/door'
+import { chairOut, chairTop, sitDown, standUp } from './skills/seat'
+import { DETOUR_TRIES, DETOUR_WAIT, STUCK_THINK, THINK_BLOCKED, THINK_GIVE_UP, THINK_WAIT, routeAround } from './skills/detour'
 
 type State =
   | { k: 'idle' }
   | { k: 'thinking' }
-  | { k: 'moving'; path: Vec2[]; obj: WorldObject; aff: Affordance }
+  /**
+   * walking a path. `next` are the skill steps that follow on arrival; `exact` legs go straight (off the grid,
+   * already checked to be clear); `onto` is the final step onto a seat or into the water; `busy` legs are part of
+   * something that must not be interrupted (passing the door, squeezing beside a bed)
+   */
+  | { k: 'moving'; path: Vec2[]; obj: WorldObject; aff: Affordance; next?: Step[]; exact?: boolean; onto?: boolean; busy?: boolean }
+  /**
+   * running the steps of a skill (skills/): `t` is real seconds into the current step; `from`, `fromPose`,
+   * `fromHeading`, `doorFrom` and `chairFrom` are where the body was, its pose and heading, the door and the
+   * seat's chair when it began
+   */
+  | { k: 'routine'; steps: Step[]; obj: WorldObject; aff: Affordance; t: number; from: Vec2; fromPose: Pose; fromHeading: number; doorFrom: number; chairFrom: number; started: boolean }
   | { k: 'doing'; obj: WorldObject; aff: Affordance; left: number; orbitAngle?: number; finishAngle?: number }
   | { k: 'waiting'; left: number }
   /** acting out a gesture on the spot; `left` is in real seconds */
@@ -17,12 +33,16 @@ type State =
 /** walking and swimming speeds in m/s (a relaxed indoor walk) */
 export const WALK_SPEED = 1.2
 export const SWIM_SPEED = 0.6
+/** starting and stopping like a person: m/s gained per second, m/s lost per second, and the slowest arrival */
+const ACCEL = 2.4
+const DECEL = 1.8
+const MIN_PACE = 0.3
+/** steps that carry on walking, so a walk that ends in one does not slow down first */
+const WALKING_STEPS = new Set(['walk', 'squeeze', 'onto'])
 /** closest two standing agents' centres get to each other */
 export const PERSONAL_SPACE = 0.6
 /** how far ahead a walker looks for people in its way */
 const LOOKAHEAD = 1.6
-/** seconds a walker waits behind someone who does not move before it steps past as a last resort */
-const STUCK_LIMIT = 4
 /** jump timing in real seconds: crouch before take-off, then time in the air */
 export const JUMP_CROUCH = 0.22
 export const JUMP_AIR = 0.5
@@ -47,8 +67,23 @@ export class Agent {
   heading = 0
   /** current walking speed in m/s, for the walk cycle */
   speedNow = 0
-  /** body gesture being played, from `gestureStart` until `gestureUntil` (performance.now ms) */
-  gesture: Gesture | '' = ''
+  /** walking backwards (pulling the door along), so the walk cycle runs the other way */
+  walkBack = false
+  /** the speed the walk has built up to: it rises when setting off and falls before stopping */
+  private pace = 0
+  /** body movement being played, from `gestureStart` until `gestureUntil` (performance.now ms) */
+  gesture: Gesture | SkillMotion | '' = ''
+  /** shoes on; they come off before lying down in bed (rule R1) */
+  shoesOn = true
+  /** where a hand must be right now (a door handle), or both hands on the feet; the avatar reaches there */
+  reach: Vec3 | 'feet' | null = null
+  /**
+   * sitting down or standing up: how far up the body is, 0 (seated) .. 1 (standing), and the seat's use point (to
+   * find its height). The avatar keeps the feet where they are and swings the hips up over them. Null at other times.
+   */
+  rise: { u: number; seat: Vec2 } | null = null
+  /** sitting up in bed or lying down: how far up the back is, 0 (lying) .. 1 (sitting). Null at other times. */
+  recline: number | null = null
   gestureStart = 0
   gestureUntil = 0
   /** facial emotion shown until `emotionUntil` (performance.now ms) */
@@ -57,6 +92,8 @@ export class Agent {
   /** height of the feet above the ground, for jumps */
   lift = 0
   private stuck = 0
+  /** how often this trip has been blocked so far (rule R4); it gives up after DETOUR_TRIES */
+  private detours = 0
 
   constructor(public persona: Persona, start: Vec2, private brain: Brain, private world: World) {
     this.pos = { ...start }
@@ -77,7 +114,8 @@ export class Agent {
   get activity() {
     const s = this.state
     return s.k === 'doing' ? `${s.aff.verb} (${s.obj.id})` : s.k === 'moving' ? `walking to ${s.obj.id}` : s.k === 'waiting' ? 'idling'
-      : s.k === 'chatting' ? `chatting with ${s.with.name}` : s.k === 'gesturing' ? GESTURE_INFO[s.gesture].label : 'standing around'
+      : s.k === 'chatting' ? `chatting with ${s.with.name}` : s.k === 'gesturing' ? GESTURE_INFO[s.gesture].label
+      : s.k === 'routine' ? describe(s.steps[0], s.obj.id) : 'standing around'
   }
 
   get dest(): Vec2 | undefined {
@@ -227,6 +265,7 @@ export class Agent {
   tick(realDt: number, gameDt: number) {
     this.world.decayNeeds(this.needs, gameDt)
     const s = this.state
+    if (s.k !== 'moving') this.pace = 0
     switch (s.k) {
       case 'idle':
         this.pose = this.world.inWater(this.pos) ? 'swim' : 'stand' // still in the lake: keep floating
@@ -237,21 +276,50 @@ export class Agent {
         })
         break
       case 'moving': {
+        this.walkBack = false
         const target = s.path[0]
         const d = dist(this.pos, target)
         // in the lake (wading in from the shore, or swimming back out) the agent swims, slower than it walks
-        const swimming = s.aff.pose !== 'sit' && (this.world.inWater(this.pos) || (s.aff.pose === 'swim' && s.path.length === 1 && !!s.obj.approach))
+        // sitting in the boat is not swimming, even on the water
+        const swimming = s.aff.pose !== 'sit' && (this.world.inWater(this.pos) || (s.aff.pose === 'swim' && !!s.onto))
         this.pose = swimming ? 'swim' : 'stand'
-        // the last step onto a seat or bed goes into the furniture, where nobody else stands
-        const onto = !!s.obj.approach && s.path.length === 1
+        // the last step onto a seat goes into the furniture, where nobody else stands
+        const onto = !!s.onto
         const free = swimming || onto ? { dx: 0, dz: 0, scale: 1 } : null
-        const full = (swimming ? SWIM_SPEED : WALK_SPEED) * realDt
+        // an exact leg (beside a bed, through the doorway) keeps to its line: no steering, no grid
+        // set off and stop gradually: speed up, and slow down for the end of the walk unless it carries on
+        const top = swimming ? SWIM_SPEED : WALK_SPEED
+        // how far there is still to walk: this path, and the walking steps straight after it
+        let left = d
+        for (let i = 1; i < s.path.length; i++) left += dist(s.path[i - 1], s.path[i])
+        let end = s.path[s.path.length - 1]
+        for (const n of s.next ?? []) {
+          if (!WALKING_STEPS.has(n.do) || !('to' in n)) break
+          left += dist(end, n.to)
+          end = n.to
+        }
+        const brake = Math.max(MIN_PACE, Math.sqrt(2 * DECEL * left))
+        this.pace = Math.min(top, brake, this.pace + ACCEL * realDt)
+        const full = this.pace * realDt
         if (d <= full) {
           this.pos = { ...target }
           this.speedNow = full / Math.max(realDt, 1e-6)
           this.stuck = 0
           s.path.shift()
-          if (!s.path.length) {
+          // carry on towards the next point with the rest of this frame's step, so the walk does not stall at
+          // every corner of the path
+          if (s.path.length) this.carryOn(s.path[0], full - d)
+          if (!s.path.length && s.next) {
+            const walksOn = !!s.next[0] && WALKING_STEPS.has(s.next[0].do)
+            this.speedNow = 0
+            this.startRoutine(s.next, s.obj, s.aff)
+            // the next walking step goes on in this frame too
+            const st = this.state
+            if (walksOn && st.k === 'moving' && st.path[0]) {
+              this.carryOn(st.path[0], full - d)
+              this.speedNow = this.pace
+            }
+          } else if (!s.path.length) {
             this.pose = s.aff.pose
             this.speedNow = 0
             this.heading = s.aff.pose === 'lie' ? Math.PI / 2 : Math.atan2(s.obj.pos.x - target.x, s.obj.pos.z - target.z)
@@ -260,7 +328,7 @@ export class Agent {
           }
         } else {
           const dx = (target.x - this.pos.x) / d, dz = (target.z - this.pos.z) / d
-          const av = free ?? this.avoid(dx, dz, s.path[s.path.length - 1])
+          const av = free ?? (s.exact ? { dx: 0, dz: 0, scale: 1 } : this.avoid(dx, dz, s.path[s.path.length - 1]))
           let mx = dx + av.dx, mz = dz + av.dz
           const ml = Math.hypot(mx, mz) || 1
           mx /= ml; mz /= ml
@@ -268,18 +336,32 @@ export class Agent {
           this.heading = Math.atan2(mx, mz)
           const right = { x: -dz, z: dx }
           // try the steered step, then a sidestep to the right, then to the left; never walk into someone
-          const tries = free ? [{ x: mx, z: mz }] : [{ x: mx, z: mz }, right, { x: -right.x, z: -right.z }]
+          const tries = free || s.exact ? [{ x: mx, z: mz }] : [{ x: mx, z: mz }, right, { x: -right.x, z: -right.z }]
           let moved = false
-          for (const t of tries) {
+          // slowed to a stop (someone stands on the goal) counts as stuck, not as walking
+          if (step > 1e-4) for (const t of tries) {
             const p = { x: this.pos.x + t.x * step, z: this.pos.z + t.z * step }
-            if (!free && !this.world.isFree(p) && this.world.isFree(this.pos)) continue
-            if (!free && this.crowds(p) && this.stuck < STUCK_LIMIT) continue
+            if (!free && !s.exact && !this.world.isFree(p) && this.world.isFree(this.pos)) continue
+            // never walk into someone (R0): wait, and after a moment look for another way (R4)
+            if (!free && this.crowds(p)) continue
             this.pos = p
             moved = true
             break
           }
-          this.stuck = moved ? Math.max(0, this.stuck - realDt) : this.stuck + realDt
+          // stuck means not getting closer to where we are going: sidestepping on the spot does not count (R4)
+          const progress = d - dist(this.pos, target)
+          this.stuck = moved && progress > step * 0.3 ? Math.max(0, this.stuck - realDt) : this.stuck + realDt
           this.speedNow = moved ? step / Math.max(realDt, 1e-6) : 0
+          if (this.stuck >= STUCK_THINK) {
+            this.stuck = 0
+            this.speedNow = 0
+            const goal = s.path[s.path.length - 1]
+            this.startRoutine([
+              { do: 'think', text: THINK_BLOCKED, secs: 1.2 },
+              { do: 'reroute', to: goal, exact: !!s.exact },
+              ...(s.next ?? []),
+            ], s.obj, s.aff)
+          }
         }
         break
       }
@@ -305,12 +387,23 @@ export class Agent {
         const loopDone = !s.aff.lap || (s.finishAngle !== undefined && s.orbitAngle! >= s.finishAngle)
         if (s.left <= 0 && loopDone) {
           this.lastResult = `finished ${s.aff.verb} at ${s.obj.id}`
-          this.release()
           this.log(this.lastResult)
-          this.state = { k: 'idle' }
+          if (s.aff.pose === 'lie') {
+            // get up the way one lay down: sit up on the edge, shoes on, stand, step back (R1, R2)
+            this.startRoutine(getUp(this.world, s.obj), s.obj, s.aff)
+          } else if (s.aff.pose === 'sit' && s.obj.approach) {
+            // stand up off the seat, stepping forward to where one came from (R0)
+            this.startRoutine(standUp(this.world, s.obj), s.obj, s.aff)
+          } else {
+            this.release()
+            this.state = { k: 'idle' }
+          }
         }
         break
       }
+      case 'routine':
+        this.runStep(realDt)
+        break
       case 'waiting':
         s.left -= gameDt
         if (s.left <= 0) this.state = { k: 'idle' }
@@ -396,11 +489,247 @@ export class Agent {
   }
 
   private walkTo(obj: WorldObject, aff: Affordance) {
-    const via = obj.approach
-    const path = this.world.findPath(this.pos, via ?? this.spotAt(obj, aff))
-    if (via) path.push({ ...obj.usePos }) // last step onto the bed / seat ignores obstacles
+    // beds by the bed skill (R1, R2); seats and the water by their approach point, then the last step onto them
+    // seats by the seat skill: step up to the seat, turn round, and sit down onto it (never walk into it, R0)
+    const steps: Step[] = aff.pose === 'lie' ? lieDown(this.world, obj, aff)
+      : aff.pose === 'sit' && obj.approach ? sitDown(this.world, obj)
+      : obj.approach ? [{ do: 'walk', to: obj.approach }, { do: 'onto', to: { ...obj.usePos } }, { do: 'use' }]
+      : [{ do: 'walk', to: this.spotAt(obj, aff) }, { do: 'use' }]
     this.stuck = 0
-    this.state = { k: 'moving', path, obj, aff }
+    this.detours = 0
+    // a fresh plan starts without the door: it takes the door again if the way leads through it
+    if (this.world.doorUser === this.name) this.world.doorUser = undefined
+    this.startRoutine(steps, obj, aff)
+  }
+
+  /** walk up to `r` metres straight towards `to`, unless someone is in the way */
+  private carryOn(to: Vec2, r: number) {
+    const d = dist(this.pos, to)
+    if (d < 1e-6 || r <= 0) return
+    const k = Math.min(r, d) / d
+    const p = { x: this.pos.x + (to.x - this.pos.x) * k, z: this.pos.z + (to.z - this.pos.z) * k }
+    if (!this.crowds(p)) {
+      this.heading = Math.atan2(to.x - this.pos.x, to.z - this.pos.z)
+      this.pos = p
+    }
+  }
+
+  private startRoutine(steps: Step[], obj: WorldObject, aff: Affordance) {
+    this.state = {
+      k: 'routine', steps: [...steps], obj, aff, t: 0, from: { ...this.pos }, fromPose: this.pose, fromHeading: this.heading,
+      doorFrom: this.world.doorOpen, chairFrom: chairOut(this.world, obj), started: false,
+    }
+    this.runStep(0)
+  }
+
+  /** blocked for too long (R4): let go of the door and of whatever was claimed, and decide again */
+  private giveUp(id: string) {
+    this.thought = THINK_GIVE_UP
+    this.thoughtUntil = performance.now() + 3000
+    this.lastResult = `could not get to ${id}: the way was blocked`
+    this.log(this.lastResult, 3)
+    if (this.world.doorUser === this.name) this.world.doorUser = undefined
+    this.release()
+    this.state = { k: 'idle' }
+  }
+
+  /** finish the current skill step and go on with the next one */
+  private nextStep(s: Extract<State, { k: 'routine' }>) {
+    s.steps.shift()
+    s.t = 0
+    s.from = { ...this.pos }
+    s.fromPose = this.pose
+    s.fromHeading = this.heading
+    s.chairFrom = chairOut(this.world, s.obj)
+    s.started = false
+  }
+
+  /**
+   * Run the current step of a skill (skills/). Walking steps hand over to the 'moving' state with the rest of
+   * the steps to follow; the others run here over their time.
+   */
+  private runStep(realDt: number) {
+    const s = this.state
+    if (s.k !== 'routine') return
+    for (let guard = 0; guard < 8; guard++) {
+      const step = s.steps[0]
+      if (!step) {
+        // a plan without an activity (getting up, giving up) ends here
+        this.release()
+        this.state = { k: 'idle' }
+        return
+      }
+      const first = !s.started
+      s.started = true
+      if (first) s.doorFrom = this.world.doorOpen
+      else s.t += realDt
+      switch (step.do) {
+        case 'walk': {
+          const path = this.world.findPath(this.pos, step.to)
+          // a spot just off the walking grid (beside a wall, the door or a bed): walk to the grid's edge, then a
+          // short squeeze the rest of the way
+          if (!this.world.isFree(step.to) && path.length > 1 && dist(path[path.length - 2], step.to) < 0.8) {
+            s.steps.splice(0, 1, { do: 'walk', to: path[path.length - 2] }, { do: 'squeeze', to: step.to })
+            s.started = false
+            continue
+          }
+          // a route through the house door goes by the door skill (R3)
+          if (this.world.doorUser !== this.name && crossesDoor(this.world, this.pos, path)) {
+            s.steps.splice(0, 1, ...throughDoor(this.world, this.pos), step)
+            s.started = false
+            continue
+          }
+          // walking up to the door it holds, nobody stops it for a chat
+          this.state = { k: 'moving', path, obj: s.obj, aff: s.aff, next: s.steps.slice(1), busy: this.world.doorUser === this.name }
+          return
+        }
+        case 'squeeze':
+          this.state = { k: 'moving', path: [{ ...step.to }], obj: s.obj, aff: s.aff, next: s.steps.slice(1), exact: true, busy: true }
+          return
+        case 'onto':
+          this.state = { k: 'moving', path: [{ ...step.to }], obj: s.obj, aff: s.aff, next: s.steps.slice(1), onto: true, busy: true }
+          return
+        case 'face':
+          if (step.toHandle) { const h = handle(this.world, this.world.doorOpen, step.toHandle); this.heading = Math.atan2(h.x - this.pos.x, h.z - this.pos.z) }
+          else this.heading = step.heading
+          this.speedNow = 0
+          if (s.t < step.secs) return
+          break
+        case 'pose': {
+          if (first && step.pose === 'stand' && this.world.inhabitants.some(o => o !== this && o.pose === 'stand' && dist(o.pos, step.at) < PERSONAL_SPACE)) {
+            // someone stands where we would stand up: wait for them to move (R0)
+            s.steps.unshift({ do: 'think', text: 'Someone is standing right there. I will wait.', secs: 1.5 })
+            s.started = false
+            continue
+          }
+          const sitUp = s.fromPose === 'lie' && step.pose === 'sit', lieDown = s.fromPose === 'sit' && step.pose === 'lie'
+          if (first) {
+            this.pose = step.pose
+            if (!sitUp && !lieDown) this.heading = step.heading
+          }
+          const k = Math.min(1, s.t / step.secs), e = k * k * (3 - 2 * k)
+          let f = e
+          const up = s.fromPose === 'sit' && step.pose === 'stand', down = s.fromPose === 'stand' && step.pose === 'sit'
+          if (up || down) {
+            // the thighs swing up from level (or down to it) about the knees, over feet that stay put: the hips
+            // move along by the thigh's reach, 1 - cos of its swing, while they rise by its sine (avatar.ts)
+            const u = up ? e : 1 - e
+            f = up ? 1 - Math.cos(u * Math.PI / 2) : Math.cos(u * Math.PI / 2)
+            this.rise = k < 1 ? { u, seat: { ...s.obj.usePos } } : null
+          }
+          if (sitUp || lieDown) {
+            // the back swings up from the bed (or down onto it) about the hips while the body turns, so the legs
+            // swing over the edge; the turn is done a little before the end, when the knees bend (avatar.ts)
+            this.recline = k < 1 ? (sitUp ? e : 1 - e) : null
+            const kt = Math.min(1, k / 0.8), et = kt * kt * (3 - 2 * kt)
+            const turn = Math.atan2(Math.sin(step.heading - s.fromHeading), Math.cos(step.heading - s.fromHeading))
+            this.heading = s.fromHeading + turn * et
+          }
+          this.pos = { x: s.from.x + (step.at.x - s.from.x) * f, z: s.from.z + (step.at.z - s.from.z) * f }
+          if (k < 1) return
+          break
+        }
+        case 'act': {
+          if (first && step.doorTo !== undefined && this.world.inhabitants.some(o => o !== this && inSwing(this.world, o.pos))) {
+            // someone is where the door swings: do not hit them with it (R0); after a while, give the door up
+            if (++this.detours > DETOUR_TRIES * 2) { this.giveUp(s.obj.id); return }
+            s.steps.unshift({ do: 'think', text: 'Someone is behind the door. I will wait.', secs: 1.5 })
+            s.started = false
+            continue
+          }
+          if (first) {
+            this.gesture = step.motion
+            this.gestureStart = performance.now()
+            this.gestureUntil = this.gestureStart + step.secs * 1000
+          }
+          const k = Math.min(1, s.t / step.secs), e = k * k * (3 - 2 * k)
+          const was = { ...this.pos }
+          // the door moves with the hand, slowly (R3), and so does a chair at a table
+          if (step.doorTo !== undefined) this.world.doorOpen = s.doorFrom + (step.doorTo - s.doorFrom) * e
+          if (step.chairTo !== undefined && s.obj.chair) this.world.chairOut.set(s.obj.chair.furniture, s.chairFrom + (step.chairTo - s.chairFrom) * e)
+          if (step.slide) this.pos = { x: s.from.x + (step.slide.x - s.from.x) * e, z: s.from.z + (step.slide.z - s.from.z) * e }
+          if (step.follow && step.doorTo !== undefined) {
+            // walk with the door's edge, starting from where one stands: wait there until the door comes level
+            const at = openAt(this.world, s.from)
+            this.pos = besideDoor(this.world, clamp(this.world.doorOpen, Math.min(at, step.doorTo), Math.max(at, step.doorTo)))
+          }
+          // the legs step with the body as it moves, backwards when the body goes the way it does not face
+          const mx = this.pos.x - was.x, mz = this.pos.z - was.z
+          this.speedNow = s.t > 0 ? Math.hypot(mx, mz) / Math.max(realDt, 1e-6) : 0
+          this.walkBack = mx * Math.sin(this.heading) + mz * Math.cos(this.heading) < 0
+          // the hand stays on the handle as the door moves, or both hands go to the feet
+          if (step.reach === 'feet') this.reach = 'feet'
+          else if (step.reach === 'chair') this.reach = s.obj.chair ? chairTop(this.world, s.obj.chair, this.pos) : null
+          else if (step.reach) {
+            const h = handle(this.world, this.world.doorOpen, step.reach)
+            this.reach = h
+            if (step.follow) this.heading = Math.atan2(h.x - this.pos.x, h.z - this.pos.z)
+          } else this.reach = null
+          if (k < 1) return
+          if (step.shoes) this.shoesOn = step.shoes === 'on'
+          this.reach = null
+          this.speedNow = 0
+          break
+        }
+        case 'think':
+          if (first) { this.thought = step.text; this.thoughtUntil = performance.now() + step.secs * 1000 + 500; this.log(`thought: ${step.text}`, 2) }
+          this.speedNow = 0
+          if (s.t < step.secs) return
+          break
+        case 'door':
+          if (step.take) {
+            const user = this.world.doorUser
+            if (user && user !== this.name) {
+              // someone else is at the door: wait for them, out of the way of the door's swing
+              s.steps.unshift(
+                ...(inSwing(this.world, this.pos) ? [{ do: 'walk', to: doorSpots(this.world).outside } as Step] : []),
+                { do: 'think', text: `${user} is using the door. I will wait.`, secs: 1.5 },
+              )
+              s.started = false
+              continue
+            }
+            this.world.doorUser = this.name
+          } else if (this.world.doorUser === this.name) this.world.doorUser = undefined
+          break
+        case 'reroute': {
+          // blocked again and again on this trip: stop trying (R4)
+          if (++this.detours > DETOUR_TRIES + 2) { this.giveUp(s.obj.id); return }
+          // is the way clear again (the person moved on, the ball rolled away, the door is free)?
+          const ahead = step.exact ? step.to : (this.world.findPath(this.pos, step.to)[0] ?? step.to)
+          const d = dist(this.pos, ahead) || 1
+          const probe = { x: this.pos.x + (ahead.x - this.pos.x) / d * 0.15, z: this.pos.z + (ahead.z - this.pos.z) / d * 0.15 }
+          if (!this.crowds(probe)) {
+            this.state = step.exact
+              ? { k: 'moving', path: [{ ...step.to }], obj: s.obj, aff: s.aff, next: s.steps.slice(1), exact: true, busy: true }
+              : { k: 'moving', path: this.world.findPath(this.pos, step.to), obj: s.obj, aff: s.aff, next: s.steps.slice(1) }
+            return
+          }
+          // still blocked: plan round the people and the stuck things nearby, if there is a way
+          const blockers = [
+            ...this.world.inhabitants.filter(o => o !== this && o.pose !== 'sit' && o.pose !== 'lie').map(o => o.pos),
+            ...this.world.props,
+          ].filter(b => dist(b, this.pos) < 1.6)
+          const path = step.exact || !blockers.length ? null : routeAround(this.world, this.pos, step.to, blockers)
+          if (path) {
+            this.state = { k: 'moving', path, obj: s.obj, aff: s.aff, next: s.steps.slice(1) }
+            return
+          }
+          // no way round: wait for it to clear, then look again
+          s.steps.splice(0, 1, { do: 'think', text: THINK_WAIT, secs: DETOUR_WAIT }, step)
+          s.started = false
+          continue
+        }
+        case 'use':
+          this.detours = 0
+          this.pose = s.aff.pose
+          if (s.aff.pose !== 'lie') this.heading = Math.atan2(s.obj.pos.x - this.pos.x, s.obj.pos.z - this.pos.z)
+          this.speedNow = 0
+          this.state = { k: 'doing', obj: s.obj, aff: s.aff, left: s.aff.duration, orbitAngle: 0 }
+          this.log(`started ${s.aff.verb} at ${s.obj.id}`, 1)
+          return
+      }
+      this.nextStep(s)
+    }
   }
 
   /**
@@ -460,7 +789,18 @@ export class Agent {
 
   /** would standing at `p` bring us closer than personal space to someone who stands or walks? */
   private crowds(p: Vec2) {
-    return this.world.inhabitants.some(o => {
+    const w = this.world
+    // the door swings here while someone else is using it
+    if (w.doorUser && w.doorUser !== this.name && inSwing(w, p) && !inSwing(w, this.pos)) return true
+    // a ball that cannot roll away (against a wall or furniture) is in the way; a free one gets pushed
+    for (const b of w.props) {
+      const d = dist(p, b)
+      if (d < 0.26 + b.r && d < dist(this.pos, b)) {
+        const k = 0.15 / (d || 1)
+        if (!w.isFree({ x: b.x + (b.x - p.x) * k, z: b.z + (b.z - p.z) * k })) return true
+      }
+    }
+    return w.inhabitants.some(o => {
       if (o === this || o.pose === 'sit' || o.pose === 'lie') return false
       const next = dist(p, o.pos)
       return next < PERSONAL_SPACE && next < dist(this.pos, o.pos)
@@ -474,5 +814,16 @@ export class Agent {
     const n = this.needs
     const insight = this.mem.reflections(1)[0]
     return `${this.persona.name}: ${act}${insight ? `\n  🧠 ${insight.text}` : ''}${this.thought ? `\n  💭 ${this.thought}` : ''}${this.speech ? `\n  💬 ${this.speech}` : ''}\n  energy ${n.energy.toFixed(0)}  fun ${n.fun.toFixed(0)}  knowledge ${n.knowledge.toFixed(0)}`
+  }
+}
+
+/** what someone running a skill step is doing, for the others and the HUD */
+function describe(step: Step | undefined, id: string) {
+  switch (step?.do) {
+    case 'act': return step.motion === 'shoes' ? 'changing shoes' : 'using the door'
+    case 'pose': return step.pose === 'lie' ? `lying down at ${id}` : step.pose === 'sit' ? `sitting down at ${id}` : `getting up from ${id}`
+    case 'think': return 'thinking'
+    case 'door': return 'at the door'
+    default: return `going to ${id}`
   }
 }

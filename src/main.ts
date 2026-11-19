@@ -6,11 +6,13 @@ import { World, dist } from './world'
 import { Agent } from './agent'
 import { Social } from './social'
 import { Physics } from './physics'
+import { DOOR_LEAF, hinge, leaf } from './skills/door'
 import { MockBrain, LLMBrain } from './brain'
 import { Avatar } from './avatar'
+import { MotionLibrary } from './clips'
 import { MemoryStream } from './memory'
 import { Speaker, type VoiceStyle } from './tts'
-import type { Persona } from './types'
+import type { Persona, TableChair } from './types'
 
 const world = new World()
 // Configure via .env (see .env.example). Without VITE_LLM_URL the mock brain is used.
@@ -138,7 +140,8 @@ physicsReady.then(p => {
   }
 })
 const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 100)
-const HOME = { pos: new THREE.Vector3(0, 9, 11), target: new THREE.Vector3(0, 0.5, 0) }
+// looking down on the room from about 50° above the floor
+const HOME = { pos: new THREE.Vector3(0, 11, 8.5), target: new THREE.Vector3(0, 0.5, 0) }
 camera.position.copy(HOME.pos)
 
 // orbit: drag = rotate, right-drag = pan, wheel = zoom. F cycles follow-cam, R resets the view.
@@ -148,9 +151,11 @@ controls.enableDamping = true
 controls.dampingFactor = 0.08
 controls.minDistance = 1.5
 controls.maxDistance = 24
-controls.maxPolarAngle = Math.PI / 2 - 0.05 // stay above the floor
+controls.maxPolarAngle = 1.1 // at least about 27° above the floor: never a low view across the room
 controls.update()
 let follow = -1 // -1 = free camera, otherwise agent index
+// moving the camera by hand ends the follow-cam, so the view is never held on someone
+controls.addEventListener('start', () => { follow = -1 })
 
 const hemi = new THREE.HemisphereLight(0xffffff, 0x445566, 0.6)
 const sun = new THREE.DirectionalLight(0xffffff, 1.2)
@@ -171,6 +176,7 @@ const GHOST = 0.08 // opacity of a wall that is in the way
 const walls: { meshes: THREE.Mesh[]; hide: () => boolean; fade: number }[] = []
 const lampLights: THREE.PointLight[] = []
 let doorLeaf: THREE.Object3D | undefined
+const chairs: { node: THREE.Object3D; rest: THREE.Vector3; chair: TableChair }[] = []
 let boatNode: THREE.Object3D | undefined
 let boatYaw = 0
 // outdoor lights from the yard layout (the campfire, the tent lantern): off by day, on after dark
@@ -181,7 +187,6 @@ const outdoorLights = world.lights.map(l => {
   return { light, base: l.intensity, flicker: l.flicker }
 })
 let doorAngle = 0
-let doorOpen = 0 // 0 closed .. 1 open
 new GLTFLoader().load(`${import.meta.env.BASE_URL}models/room.glb`, gltf => {
   gltf.scene.traverse(o => {
     if (o instanceof THREE.Mesh) o.castShadow = o.receiveShadow = true
@@ -207,10 +212,24 @@ new GLTFLoader().load(`${import.meta.env.BASE_URL}models/room.glb`, gltf => {
     })
     walls.push({ meshes, hide, fade: 0 })
   }
-  // the leaf swings open (about its hinge) when someone is at the door
+  // the leaf swings about its hinge as people open and close it by hand (skills/door.ts sets world.doorOpen)
   addSolids(gltf.scene, ROOM_SOLID)
   doorLeaf = gltf.scene.getObjectByName('DOOR_leaf')
   doorAngle = THREE.MathUtils.degToRad(Number(doorLeaf?.userData.open_angle ?? 0))
+  if (doorLeaf) {
+    // the door skill plans with DOOR_LEAF; say so if the model's door has moved or changed
+    const h = hinge(world), box = new THREE.Box3().setFromObject(doorLeaf)
+    const width = box.max.z - box.min.z
+    if (Math.hypot(doorLeaf.position.x - h.x, doorLeaf.position.z - h.z) > 0.05 || Math.abs(width - DOOR_LEAF.width) > 0.08 ||
+      Math.abs(Number(doorLeaf.userData.open_angle ?? 0) - DOOR_LEAF.openDeg) > 1) {
+      console.warn('room.glb DOOR_leaf no longer matches DOOR_LEAF in src/skills/door.ts', { at: doorLeaf.position, width })
+    }
+  }
+  // chairs at a table slide out and back in as people sit down and get up (skills/seat.ts sets world.chairOut)
+  for (const o of world.objects) {
+    const node = o.chair && gltf.scene.getObjectByName(o.chair.node)
+    if (o.chair && node) chairs.push({ node, rest: node.position.clone(), chair: o.chair })
+  }
   scene.add(gltf.scene)
   // the lamps glow warm at night, the glow fades out with the daylight (see frame())
   gltf.scene.updateMatrixWorld(true)
@@ -242,11 +261,15 @@ new GLTFLoader().load(`${import.meta.env.BASE_URL}models/outdoor.glb`, gltf => {
 
 // avatars: capsule until a VRM loads
 const avatars = agents.map(a => {
-  const av = new Avatar(a.persona.color)
+  const av = new Avatar(a.persona.color, a.persona.name)
   scene.add(av.root)
   av.setName(a.name, a.persona.color)
   return av
 })
+// motion clips (public/motions, made with tools/kimodo); without them the avatars use procedural motion only
+MotionLibrary.load(import.meta.env.BASE_URL + 'motions/')
+  .then(lib => { if (lib.clips.length) avatars.forEach(av => av.useMotions(lib)) })
+  .catch(e => console.warn('motion clips failed to load', e))
 // per-agent models (public/model.vrm, public/model2.vrm); the capsule shows until one loads.
 // Vite's SPA fallback serves HTML for missing files, so sniff the "glTF" magic.
 // Without your own file, the public sample avatar in public/models/avatars is used (licenses in the README there).
@@ -341,6 +364,7 @@ function frame(now: number) {
   if (physics) {
     for (const a of agents) physics.syncAgent(a.name, { x: a.pos.x, y: a.lift, z: a.pos.z }, a.pose)
     physics.step(dt)
+    world.props = balls.map(b => { const t = b.prop.body.translation(); return { x: t.x, z: t.z, r: b.prop.radius } })
     for (const b of balls) {
       const t = b.prop.body.translation(), q = b.prop.body.rotation()
       b.mesh.position.set(t.x, t.y, t.z)
@@ -371,10 +395,15 @@ function frame(now: number) {
     boatNode.position.set(tx, Math.sin(now * 0.0015) * 0.012, tz)
     boatNode.rotation.set(0, boatYaw, Math.sin(now * 0.0011) * 0.015)
   }
-  if (doorLeaf) {
-    const near = agents.some(a => dist(a.pos, world.door) < 1.3)
-    doorOpen += ((near ? 1 : 0) - doorOpen) * (1 - Math.exp(-dt * 7))
-    doorLeaf.rotation.y = doorAngle * doorOpen
+  if (doorLeaf) doorLeaf.rotation.y = doorAngle * world.doorOpen
+  for (const c of chairs) {
+    const k = world.chairOut.get(c.chair.furniture) ?? 0
+    c.node.position.set(c.rest.x + c.chair.out.x * k, c.rest.y, c.rest.z + c.chair.out.z * k)
+  }
+  if (physics) {
+    // the leaf is solid too: balls bounce off it, and gestures see it (R0)
+    const [a, b] = leaf(world, world.doorOpen)
+    physics.setDoor(a, b)
   }
 
   agents.forEach((a, i) => avatars[i].update(dt, a, physics))

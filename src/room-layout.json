@@ -213,8 +213,13 @@
       "id": "desk_chair",
       "kind": "office chair",
       "node": "FURN_desk_chair",
-      "blocksWalk": false,
-      "footprint": null
+      "blocksWalk": true,
+      "footprint": {
+        "cx": 2.216,
+        "cz": -2.831,
+        "w": 0.67,
+        "d": 0.629
+      }
     },
     {
       "id": "bookshelf",
@@ -379,15 +384,25 @@
       "id": "stool_1",
       "kind": "stool",
       "node": "FURN_stool_1",
-      "blocksWalk": false,
-      "footprint": null
+      "blocksWalk": true,
+      "footprint": {
+        "cx": 1.4,
+        "cz": 0.733,
+        "w": 0.368,
+        "d": 0.354
+      }
     },
     {
       "id": "stool_2",
       "kind": "stool",
       "node": "FURN_stool_2",
-      "blocksWalk": false,
-      "footprint": null
+      "blocksWalk": true,
+      "footprint": {
+        "cx": 1.4,
+        "cz": 2.067,
+        "w": 0.368,
+        "d": 0.354
+      }
     },
     {
       "id": "fruit_plant",
@@ -629,7 +644,22 @@
       ],
       "approach": {
         "x": 2.216,
-        "z": -2.695
+        "z": -2.195
+      },
+      "chair": {
+        "furniture": "desk_chair",
+        "node": "FURN_desk_chair",
+        "at": {
+          "x": 2.216,
+          "z": -2.831
+        },
+        "out": {
+          "x": 0,
+          "z": 1
+        },
+        "w": 0.67,
+        "d": 0.629,
+        "top": 1.215
       },
       "footprint": {
         "cx": 2.0,
@@ -663,7 +693,22 @@
       ],
       "approach": {
         "x": 1.4,
-        "z": 0.553
+        "z": 0.153
+      },
+      "chair": {
+        "furniture": "stool_1",
+        "node": "FURN_stool_1",
+        "at": {
+          "x": 1.4,
+          "z": 0.733
+        },
+        "out": {
+          "x": 0,
+          "z": -1
+        },
+        "w": 0.368,
+        "d": 0.354,
+        "top": 0.46
       },
       "footprint": {
         "cx": 1.4,
@@ -697,7 +742,22 @@
       ],
       "approach": {
         "x": 1.4,
-        "z": 2.247
+        "z": 2.647
+      },
+      "chair": {
+        "furniture": "stool_2",
+        "node": "FURN_stool_2",
+        "at": {
+          "x": 1.4,
+          "z": 2.067
+        },
+        "out": {
+          "x": 0,
+          "z": 1
+        },
+        "w": 0.368,
+        "d": 0.354,
+        "top": 0.46
       }
     },
     {
@@ -889,7 +949,7 @@
   "checks": {
     "errors": [],
     "notes": [
-      "walkable cells: 1013 of 2000, reachable from the middle: 1013",
+      "walkable cells: 968 of 2000, reachable from the middle: 968",
       "bed: mattress 0.50 m",
       "bed2: mattress 0.50 m",
       "sofa_seat_1: seat 0.46 m",

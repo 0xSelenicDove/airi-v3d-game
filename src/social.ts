@@ -66,8 +66,10 @@ export class Social {
 
   /** standing and free to stop: walking, idling or waiting, on land, not in a talk */
   private canStop(a: Agent) {
-    const k = a.state.k
-    return (k === 'moving' || k === 'idle' || k === 'waiting') && a.pose === 'stand' && !this.world.inWater(a.pos) && !this.talkOf(a)
+    const s = a.state
+    // not in the middle of something that must not be interrupted: passing the door, squeezing beside a bed
+    if (s.k === 'moving' && s.busy) return false
+    return (s.k === 'moving' || s.k === 'idle' || s.k === 'waiting') && a.pose === 'stand' && !this.world.inWater(a.pos) && !this.talkOf(a)
   }
 
   /** busy with something, but awake and able to answer from where they are */
@@ -77,6 +79,10 @@ export class Social {
 
   /** nothing solid between them: the floor between them is walkable (endpoints may be on furniture) */
   private inSight(a: Agent, b: Agent) {
+    // the house walls (and its door) are between someone inside and someone outside
+    const { w, d: depth } = this.world.bounds
+    const inHouse = (p: { x: number; z: number }) => Math.abs(p.x) < w / 2 && Math.abs(p.z) < depth / 2
+    if (inHouse(a.pos) !== inHouse(b.pos)) return false
     const d = dist(a.pos, b.pos)
     if (d < 1) return true
     const t0 = 0.45 / d, t1 = 1 - t0

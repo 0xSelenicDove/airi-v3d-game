@@ -347,7 +347,8 @@ place('mouse', 'computerMouse', 'mouse', facing='+z', cx=KNEE_X + 0.38, z1=da[3]
       blocks=False)
 place('desk_lamp', 'lampSquareTable', 'desk lamp', facing='+z', cx=da[0] + 0.2, z0=da[2] + 0.06,
       h=da[5] + 0.002, blocks=False)
-chair = place('desk_chair', 'chairDesk', 'office chair', facing='-z', cx=KNEE_X, z0=da[3], blocks=False,
+# chairs and stools at a table block walking: the sitter pulls one out and pushes it back in (src/skills/seat.ts)
+chair = place('desk_chair', 'chairDesk', 'office chair', facing='-z', cx=KNEE_X, z0=da[3],
               recolor={'carpet': 'fabric_charcoal'})
 
 shelf = place('bookshelf', 'bookcaseClosedWide', 'bookshelf', facing='-x', x1=HW - 0.01, z0=-2.95)
@@ -406,10 +407,8 @@ table = place('dining_table', 'table', 'dining table', facing='+z', cx=1.4, cz=1
 ta = table.aabb()
 STOOL_SEAT = 0.46
 s_scale = (2.4, 2.4, STOOL_SEAT / 0.405)
-stool1 = place('stool_1', 'stoolBarSquare', 'stool', facing='+z', cx=1.4, cz=ta[2] - 0.22, scale=s_scale,
-               blocks=False)
-stool2 = place('stool_2', 'stoolBarSquare', 'stool', facing='-z', cx=1.4, cz=ta[3] + 0.22, scale=s_scale,
-               blocks=False)
+stool1 = place('stool_1', 'stoolBarSquare', 'stool', facing='+z', cx=1.4, cz=ta[2] - 0.22, scale=s_scale)
+stool2 = place('stool_2', 'stoolBarSquare', 'stool', facing='-z', cx=1.4, cz=ta[3] + 0.22, scale=s_scale)
 place('fruit_plant', 'plantSmall2', 'small plant', facing='+z', cx=1.4, cz=1.4, h=ta[5] + 0.002, blocks=False,
       scale=(2.4, 2.4, 2.4))
 
@@ -503,6 +502,8 @@ def sit(id, kind, furniture, item_for_seat, facing, hips, verbs, target=None, re
         seat=(item_for_seat.id, seat_h))
     INTERACTIONS[-1]['facing'] = facing
     INTERACTIONS[-1]['approach_dir'] = (fx, fz) if from_front else (-fx, -fz)
+    # a chair at a table slides out away from the table, so the game must know which one and how big it is
+    INTERACTIONS[-1]['chair'] = None if from_front else item_for_seat
 
 
 def stand(id, kind, furniture, facing, verbs, dist=0.45, a=0.0):
@@ -935,6 +936,13 @@ for ia in INTERACTIONS:
            'affordances': ia['verbs']}
     if ia['approach']:
         obj['approach'] = {'x': r3(ia['approach'][0]), 'z': r3(ia['approach'][1])}
+    if ia.get('chair'):
+        c, (ox, oz) = ia['chair'], ia['approach_dir']
+        fp, top = c.footprint(), c.aabb()[5]
+        # `out`: the way it slides out (away from the table); `w` across that way, `d` along it
+        obj['chair'] = {'furniture': c.id, 'node': c.obj.name, 'at': {'x': r3(fp['cx']), 'z': r3(fp['cz'])},
+                        'out': {'x': ox, 'z': oz}, 'w': r3(fp['d'] if ox else fp['w']),
+                        'd': r3(fp['w'] if ox else fp['d']), 'top': r3(top)}
     if f and f.blocks and ia['furniture'] not in seen:
         obj['footprint'] = fp_json(f.footprint())
         seen.add(ia['furniture'])
