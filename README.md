@@ -2,57 +2,50 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-**[Live demo](https://0xselenicdove.github.io/airi-v3d-game/)** (runs with the mock brain and two public sample avatars; add your own `.vrm` models and LLM locally for the full experience)
+A small 3D world driven entirely by AI. Think "VRChat, but the inhabitants are AIs": each AI has a VRM avatar, lives in a shared house, follows its own daily routine (sleeps, uses the computer, eats, goes out for fresh air), and uses the things in the house the way a person would.
 
-A small 3D world that is driven entirely by AI. Think "VRChat, but the inhabitants are AIs": each AI has a VRM avatar, lives in a shared room, follows its own daily routine (sleeps, reads, uses the computer), remembers what happened, and talks to the others.
+Built with **Unity 6** (URP), [UniVRM](https://github.com/vrm-c/UniVRM), Unity's NavMesh and its physics.
 
-Built with TypeScript, [three.js](https://threejs.org/) and [@pixiv/three-vrm](https://github.com/pixiv/three-vrm). It runs in the browser; there is no backend.
+> **Status: Unity migration, milestone 1 (vertical slice).** The game moved from three.js to Unity because the web version could not get past its limits: props that do not come apart, stiff procedural motion, and doors without weight. This branch has one house with a working door, bed, desk and fridge, two characters, and the rule-based mock brain. The LLM brain, memory, small talk, speech and the AIRI bridge from the web version are **not ported yet**; they are in git history (the last web version is commit `157b50f`).
 
-> Status: working prototype. The agents run on a built-in rule-based "mock brain" by default. You can plug in any OpenAI-compatible LLM (your own model, Ollama, LM Studio, vLLM, ...), and it has been tried with one hosted model (Gemini 2.5 Flash via 302.ai, see below).
+![Night in the house: Luna asleep under her blanket, Airi coming in and closing the front door](docs/images/overview.jpg)
 
-## Features
+| Door (R3) | Bed (R2) |
+| --- | --- |
+| ![Luna takes the handle, walks out with the door, goes round it and closes it from outside](docs/images/door.jpg) | ![Luna sits on the edge, throws the blanket back, lies down, and the blanket drapes over her](docs/images/bed.jpg) |
+| **Fridge** | **Desk** |
+| ![Airi pulls the fridge open, the light comes on, she reaches in and pushes it shut](docs/images/fridge.jpg) | ![Luna sits at the desk and types on the laptop](docs/images/desk.jpg) |
 
-- **Autonomous agents** with needs (energy, fun, knowledge) that drive what they do, a persona, and a day/night clock.
-- **Affordance-based world**: objects advertise what can be done with them (`bed → sleep`, `desk → use_computer`, `bookshelf → read`). The AI only picks high-level actions; the world handles walking and animation.
-- **Pluggable brains**: a mock utility brain, or an OpenAI-compatible LLM brain with JSON-action parsing, timeouts, error feedback and automatic fallback.
-- **Memory** in the style of *Generative Agents*: a memory stream, recall by recency + importance + relevance, periodic reflection into insights, and persistence across reloads (`localStorage`).
-- **Multiple agents**: exclusive furniture (one person per bed/desk), speech that nearby agents actually hear, separate personas and sleep schedules.
-- **Pathfinding**: grid A* around furniture and walls, with a debug overlay.
-- **Behaviour rules** ([`src/skills/RULES.md`](src/skills/RULES.md)), carried out by skills and checked by tests: nothing passes through anything else; shoes come off before lying in bed; people sit on the bedside before lying down; the door is opened by its handle, slowly, and closed again behind them; and when the way is blocked, they stop and think about another route instead of pushing through.
-- **Chance meetings**: agents walk at a relaxed pace, keep their personal space and pass each other on the right. When two meet, they may stop for small talk, wave hello, or walk on.
-- **VRM avatars** with procedural animation: walking, sitting and typing, reading with a book, sleeping, breathing, blinking, talking gestures, looking at nearby agents. Each character has a way of walking and standing of its own, with random variation and idle fidgets.
-- **Motion clips** (optional): walking and standing clips made with the Kimodo motion model ([`tools/kimodo`](tools/kimodo/README.md)), played as `.vrma` under the gestures and the hand IK.
-- **Acting**: the LLM (or the mock brain) can make the body do something, such as wave, raise a hand or a leg, nod, bow, clap, point, stretch, cheer or jump, and set the face (happy, sad, angry, surprised, relaxed, shy). It works with any VRM.
-- **World physics** ([Rapier](https://rapier.rs/)): furniture, walls, fences and trees are solid. A gesture plays only if the body has room for it, otherwise the model is told what is in the way. Jumps follow gravity, people push the beach balls around, and hair and clothes rest against nearby backrests, tables and walls.
-- **In-world UI**: name tags, speech bubbles and thought bubbles above each agent.
-- **Camera**: orbit / pan / zoom and a follow mode. Moving the camera by hand ends the follow mode. The camera stays at least about 27° above the floor.
-- **Voice**: agents speak aloud with the browser's built-in text-to-speech (a different voice per agent, quieter when far from the camera). It starts after your first click or key press.
+## What is new in Unity
+
+- **Props that come apart.** The fridge door, the laptop lid and the front door are separate parts on hinges, and the blanket is cloth. Every moving part is a rigid body on a `HingeJoint` with a spring and a damper, so it has weight: it speeds up, slows down and settles, and stops against people instead of passing through them. Characters push it by the handle; they never set its angle.
+- **Humanoid animation.** Every pose is an Animator state, and every change of pose is a cross-fade. Hands are placed on handles and lids with arm IK, the head and eyes turn to what the character attends to, and the hips are lowered onto seats and mattresses whatever the avatar's size. VRM spring bones move the hair.
+- **NavMesh walking** with avoidance between the characters; the door and fridge door carve the NavMesh where they stand.
+- **Smooth, bevelled props** modelled in Blender from a script ([`tools/blender/build_props.py`](tools/blender/build_props.py)), instead of the low-poly kit.
+- **A generated scene.** [`SliceSceneBuilder.cs`](Assets/Scripts/Editor/SliceSceneBuilder.cs) builds `Assets/Scenes/Room.unity` from code (house, props, joints, cloth, NavMesh, lighting, characters), so the scene can be reviewed and rebuilt.
+
+The behaviour rules from the web version carry over: see [`Assets/Scripts/Agents/RULES.md`](Assets/Scripts/Agents/RULES.md).
 
 ## Quick start
 
-Requires Node.js 18+.
+Requires **Unity 6000.6.9f1** (with the Mac or Windows build support you need) and Blender 4+ only if you change the props.
+
+1. Open the project in Unity Hub (the repository root is the project), or from the command line:
+   ```bash
+   unity open .
+   ```
+   The first import downloads UniVRM from GitHub and takes a few minutes.
+2. Open `Assets/Scenes/Room.unity` and press Play.
+
+If the avatars show pink or missing after the first import, run **AiWorld ▸ Build Room Scene**: it imports the models again (the first import of a fresh checkout runs before the VRM shaders exist) and rebuilds the scene. From the command line:
 
 ```bash
-npm install
-npm run dev
+/Applications/Unity/Hub/Editor/6000.6.9f1/Unity.app/Contents/MacOS/Unity -batchmode -projectPath . -executeMethod AiWorld.EditorTools.BatchTools.BuildScene -quit
 ```
 
-Open http://localhost:5173.
+### Your own avatars
 
-### Add avatar models
-
-Put your own models here (any VRM 0.x or 1.0 file works):
-
-```
-public/model.vrm    # first agent (Airi)
-public/model2.vrm   # second agent (Luna)
-```
-
-Without them, the game uses two public sample avatars from the official VRM samples, in [`public/models/avatars`](public/models/avatars): **Seed-san model by VirtualCast, Inc.** for Luna, and VRM1_Constraint_Twist_Sample by pixiv Inc. for Airi. Both are under the [VRM Public License 1.0](https://vrm.dev/licenses/1.0/). The agents show as colored capsules until a model loads. You can also drag a `.vrm` file onto the page: it replaces the model of the agent on the half of the screen where you drop it.
-
-Textures larger than 1024 px are scaled down to 1024 px when a model loads (`MAX_TEXTURE` in [`src/prepare.ts`](src/prepare.ts)). VRoid exports often have 4096 px textures, about 1.5 GB of GPU memory per character, and at this camera distance they look the same. Shaders compile and textures upload before the model appears, so the game does not freeze when it arrives.
-
-On a slow GPU the game lowers its drawing resolution until it runs smoothly, and raises it again when there is room ([`src/resolution.ts`](src/resolution.ts)). On a laptop with two GPUs, Windows often runs the browser on the integrated one: in Windows Settings > System > Display > Graphics, set your browser to *High performance* for the full frame rate.
+Put your models at `Assets/Avatars/User/model.vrm` (Airi) and `Assets/Avatars/User/model2.vrm` (Luna), then run **AiWorld ▸ Build Room Scene**. Any VRM 0.x or 1.0 works. These files are git-ignored. Without them the game uses two public sample avatars in [`Assets/Avatars`](Assets/Avatars) (Seed-san by VirtualCast, Inc. and VRM1_Constraint_Twist_Sample by pixiv Inc., VRM Public License 1.0).
 
 ## Controls
 
@@ -61,148 +54,54 @@ On a slow GPU the game lowers its drawing resolution until it runs smoothly, and
 | Drag | Rotate the camera |
 | Right-drag | Pan |
 | Scroll | Zoom |
-| `F` | Cycle follow-camera: Airi → Luna → free. Moving the camera by hand ends it. |
+| `F` | Follow Airi → Luna → free. Moving the camera by hand ends it. |
 | `R` | Reset the view |
-| `1` / `2` / `3` | Game speed (normal / fast / fastest) |
-| `G` | Toggle the navigation debug overlay (blocked cells and routes) |
-| `M` | Mute / unmute the agents' voices |
+| `1` / `2` / `3` | Game speed (×1 / ×5 / ×20) |
 
-Add `?reset` to the URL (`http://localhost:5173/?reset`) to wipe saved memories and the clock.
+Walls between the camera and the room hide themselves (they still cast shadows).
 
-## Using a real LLM
+## Project layout
 
-1. Copy `.env.example` to `.env.local`.
-2. Set the endpoint and model:
-
-   ```bash
-   # Ollama:    http://localhost:11434/v1/chat/completions
-   # LM Studio: http://localhost:1234/v1/chat/completions
-   VITE_LLM_URL=http://localhost:11434/v1/chat/completions
-   VITE_LLM_MODEL=your-model-name
-   # VITE_LLM_KEY=
-   ```
-
-3. Restart `npm run dev` (Vite only reads env files at startup).
-
-Optional: `VITE_LLM_SYSTEM_ROLE=1` sends the instructions as a real `system` message. By default they go inside the user message, because some hosted models (including the Gemini model below) follow the exact JSON format far more reliably that way.
-
-The HUD shows `brain: LLM` when it is active. If a call fails or returns something unusable, the agent falls back to the mock brain and the HUD shows a warning.
-
-Notes:
-
-- The model is asked for one JSON action per turn, plus a short `thought`:
-  `{"thought":"...","type":"interact","object":"desk","verb":"use_computer"}`. Other actions are `say`, `gesture` and `wait`.
-- To act, the model adds `"emotion"` and `"gesture"` to `say`, or sends `{"type":"gesture","gesture":"nod"}`. It can also start what it says with tags, in the style of [LumenAct](https://github.com/AaBb-coder/LumenAct): `（微笑）（挥挥右手）早上好！` or `(smile)(wave) Morning!`. Chinese commands like `挥挥左手`, `把右手举高` and `抬起右腿` (as in [HAST-SEC](https://github.com/sola1039/HAST-SEC)) map to gestures. The full list is in [`src/acting.ts`](src/acting.ts).
-- The prompt lists every legal action, and near-miss replies (e.g. `{"command":"sleep bed2"}`) are recovered when the intent is clear. The HUD brain stats are available in the console as `dbg.brain.stats` (`strict` / `coerced` / `failed`).
-- If the model picks something that does not exist, the error is returned to it on its next turn.
-- Everything is called directly from the browser. If your server blocks cross-origin requests, allow `http://localhost:5173` (for Ollama, set `OLLAMA_ORIGINS`).
-- Anything in a `VITE_` variable is visible in the browser, so do not put a production API key there.
-
-## AIRI in the world (MCP)
-
-[AIRI](https://github.com/moeru-ai/airi), or any other MCP client, can live in the world as **Airi** and decide for herself. Luna stays an NPC with her own brain.
-
-```
-AIRI ⇄ MCP (stdio or HTTP) ⇄ bridge/airi-mcp.mjs ⇄ WebSocket (127.0.0.1:8789) ⇄ the game page (?airi)
-```
-
-1. Run `npm install` in this repository.
-2. Add the bridge to AIRI's MCP servers (its `mcp.json`). Choose one:
-   - stdio: AIRI starts the bridge itself.
-     ```json
-     { "mcpServers": { "airi-v3d-game": { "command": "node", "args": ["<path to airi-v3d-game>/bridge/airi-mcp.mjs"] } } }
-     ```
-   - HTTP: start the bridge yourself with `npm run airi-bridge`, then connect AIRI to the URL.
-     ```json
-     { "mcpServers": { "airi-v3d-game": { "url": "http://127.0.0.1:8790/mcp" } } }
-     ```
-3. Open the game with `?airi` in the address, for example `http://localhost:5173/?airi`, or the live demo with `?airi`. The HUD shows `AIRI: connected, playing Airi`.
-
-AIRI gets these tools:
-
-| Tool | What it does |
+| Path | What is there |
 | --- | --- |
-| `world_status` | The time, what Airi and the others are doing and where, and the gestures and emotions `act` accepts |
-| `look` | What Airi sees: her needs, the things she can use (ids and verbs), people nearby, what she heard, her memories, the result of her last action |
-| `act` | Use an object, say something, act out a gesture, or wait. `interrupt: true` ends the current activity first |
-| `wait_for_event` | What happened since the last call: what Airi did and noticed, what she heard, `turn` when she waits for a decision, and `autopilot` when her own brain decided |
+| `Assets/Scripts/Agents` | `Agent` (needs, the day loop, and the routines that do each action), `AvatarRig` (the body: Animator, IK, look-at, blinking, body colliders), `MockBrain` (picks what to do next; an LLM brain plugs into `IBrain`) |
+| `Assets/Scripts/World` | `Hinged` (doors and lids), `SoftBlanket` (the cloth blanket), `Interactable` and `Affordance` (what a thing lets you do), `House` (inside or outside, the front door), `GameClock`, `WallCutaway`, and the `*Parts` components that hold the points a routine needs |
+| `Assets/Scripts/Editor` | `SliceSceneBuilder` (builds the scene), `ClipFactory` (makes the humanoid clips and the Animator Controller), `BatchTools` (command-line entry points) |
+| `Assets/Art/Props` | The props, exported by `tools/blender/build_props.py` |
+| `Assets/Animations` | `Character.controller`; `Generated/` holds the made clips; put motion capture in `Mocap/` |
+| `bridge/` | The AIRI MCP bridge from the web version (Node). It still speaks the web page's protocol; the Unity side is not written yet. |
+| `art/` | Blender sources and the Kenney furniture kit used by the web version |
+| `tools/kimodo` | Scripts that make motion clips with NVIDIA's Kimodo (`.vrma`) |
 
-- While AIRI is connected, Airi waits for AIRI's next action. AIRI's model acts only on its own turns, so when it gives no action for 60 s, Airi's own brain decides that one thing (autopilot). AIRI gets an `autopilot` event and can change it with `interrupt: true`. Change the time with `?airi&autopilot=<seconds>`, or turn it off with `autopilot=0`.
-- When AIRI disconnects, Airi goes back to her own brain.
-- The bridge listens only on 127.0.0.1. It accepts game pages from this computer and from the live demo only. Add another origin with `--origin`.
-- Change the ports with `--ws <port>` (default 8789) and `--http <port>` (default for `npm run airi-bridge`: 8790). With another WebSocket port, open the game with `?airi=ws://127.0.0.1:<port>`.
-- Keep the game tab visible. Browsers pause background tabs, and then the game cannot answer.
+### Motion capture
 
-## How it works
+The clips in `Assets/Animations/Generated` (idle, walk, sit, type, lie, eat) are made from humanoid muscle values by `ClipFactory`. They play on any VRM, but they are placeholders. **Real motion capture is the biggest step up in quality:** put a humanoid clip named `Idle`, `Walk`, `Sit`, `Type`, `Lie` or `Eat` (an `.fbx` with its rig set to Humanoid, or an `.anim`) in `Assets/Animations/Mocap`, then run **AiWorld ▸ Build Animator**. Mixamo (free with an Adobe account) and the Unity Asset Store have suitable clips.
 
-```
-World (clock, objects, occupancy, speech) ── Agent (needs, state machine, memory) ── Brain (decide / reflect)
-            │                                              │
-            └──────────── Avatar (VRM, poses, bubbles) ◄───┘          three.js scene + camera
-```
+### Props
 
-Each agent runs two loops. A **slow loop** asks the brain for the next action only when the agent is idle; the **fast loop** (walking, animation, needs decay) runs every frame without the model. This keeps LLM cost and latency low.
-
-| File | What it does |
-| --- | --- |
-| [`src/world.ts`](src/world.ts) | Clock, objects and their affordances (from `src/room-layout.json`), occupancy, speech broadcast, navigation grid and A* |
-| [`src/agent.ts`](src/agent.ts) | Agent state machine, needs, observations, action validation, reflection trigger, walking and avoiding others |
-| [`src/social.ts`](src/social.ts) | Chance meetings: greetings, waves and small talk when two agents meet |
-| [`src/skills/`](src/skills) | Behaviour rules and the skills that carry them out: going to bed, using the door, finding another way |
-| [`src/acting.ts`](src/acting.ts) | Gestures and emotions the agents can act out, and the words and tags the LLM may use for them |
-| [`src/physics.ts`](src/physics.ts) | Rapier world: solid scenery, the agents' bodies, beach balls, and the space checks for gestures |
-| [`src/brain.ts`](src/brain.ts) | `MockBrain`, `LLMBrain`, JSON action parsing |
-| [`src/airi.ts`](src/airi.ts) | AIRI in the world: the brain AIRI drives, and the page's link to the MCP bridge ([`bridge/airi-mcp.mjs`](bridge/airi-mcp.mjs)) |
-| [`src/memory.ts`](src/memory.ts) | Memory stream, scored retrieval, pruning, (de)serialization |
-| [`src/avatar.ts`](src/avatar.ts) | VRM loading, procedural animation, name tags and bubbles |
-| [`src/main.ts`](src/main.ts) | Scene, room model, camera, persistence, debug overlay |
-| [`src/types.ts`](src/types.ts) | Shared types (actions, observations, personas) |
-
-### Customizing
-
-- **Add a persona**: add an entry to `personas` in `src/main.ts` (name, description, color, sleep window, bed) and a start position. Give it a bed in `src/world.ts`.
-- **Add an object**: place the furniture and its interaction in `tools/blender/build_room.py` and run it again (see below). The game reads the objects from `src/room-layout.json` and draws `public/models/room.glb`.
-- **Use your own model**: implement the `Brain` interface (`decide`, optionally `reflect`) in `src/brain.ts` and pass it to the agents in `src/main.ts`.
-
-### Room model (Blender)
-
-[`tools/blender/build_room.py`](tools/blender/build_room.py) assembles a furnished single room in Blender from the low-poly [Kenney Furniture Kit](https://kenney.nl/assets/furniture-kit) (CC0). The models it uses are in [`assets/kenney-furniture-kit`](assets/kenney-furniture-kit). The room has two beds, a wardrobe, a sofa, an armchair, a TV, a desk, a bookshelf, a kitchen with a fridge, sink and cooker, a dining table with stools, a washing machine, windows and a door. The game loads it at startup, and hides each wall that is between the camera and the room.
-
-The room is light: about 8,600 triangles, about 130 draw calls, no textures, and a GLB of about 500 KB.
+Edit `tools/blender/build_props.py`, then:
 
 ```bash
-blender -b --factory-startup -P tools/blender/build_room.py -- --repo .
+/Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup -P tools/blender/build_props.py -- --repo .
 ```
 
-It writes three files:
+A part named `<Prop>.Hinge.<Part>` swings on a hinge at its origin (about the vertical axis, or the left-right axis if the name ends in `.X`); `<Prop>.Soft.<Part>` becomes cloth. Then run **AiWorld ▸ Build Room Scene**.
 
-| File | Content |
-| --- | --- |
-| `public/models/room.glb` | The room for three.js. Each piece of furniture is a `FURN_<id>` node. Interaction points are `IP_<id>_use` and `IP_<id>_approach` nodes. |
-| `src/room-layout.json` | Furniture footprints and interaction objects (`pos`, `usePos`, `approach`, `affordances`) in game coordinates, in the same shape as `WorldObject`. `src/world.ts` imports it. |
-| `assets/room.blend` | The same scene for editing in Blender. |
+## Not ported yet
 
-The script stops with an error in these cases:
+From the web version (see git history up to `157b50f`):
 
-- Two pieces of furniture intersect. It tests the real mesh triangles.
-- A sitting, lying or standing avatar would clip into furniture. It uses the poses in `src/avatar.ts`.
-- A seat or bed has the wrong height for those poses.
-- An interaction point cannot be reached on the navigation grid.
-
-Add `--render <dir>` to also save preview images.
+- the LLM brain (OpenAI-compatible endpoint), memory and reflection, small talk and chance meetings, speech bubbles and text-to-speech, gestures and facial expressions on request;
+- the AIRI connection: `bridge/airi-mcp.mjs` is kept, and `Agent.Request(objectId, verb)` is the hook a Unity-side WebSocket client will call;
+- R1 (shoes off before bed), the outdoor area with the lake and the rowboat, the tent;
+- a Web (WebGL) build and the GitHub Pages demo.
 
 ## Known limitations
 
-- Only memories and the world clock are saved across reloads; positions and needs reset.
-- Relevance in memory recall is keyword overlap, not embeddings.
-- Without clips in `public/motions`, animation is procedural, so it is stiffer than real motion. Clips cover walking and standing only.
-- Small talk in chance meetings uses fixed lines picked for the situation, not the LLM.
-- Someone who blocks the only way through (a full gate) makes a walker wait and finally give up; nobody is pushed aside.
-- The LLM brain has only been tried with Gemini 2.5 Flash (no thinking) through 302.ai: about 2-3 s per decision, 10 of 11 replies exactly in format and 1 recovered, in a ~100 s run. Other models may need prompt tweaks. Agents also tend to chat repetitively.
-- Hair and clothes rest against the nearest surface in each direction (a plane), so a strongly curved piece of furniture can still be crossed a little.
-- Gestures are procedural poses, not motion captured or generated by a motion model. Agents walk on the navigation grid; physics moves only the balls and checks the space for gestures.
-- The arm poses for typing and sitting were tuned with two sample VRMs. A much larger model can still touch the furniture.
-- No automated tests.
+- Generated clips are stiff compared with motion capture (see above).
+- Characters slide sideways onto the desk chair; the chair does not move yet.
+- The blanket is simulated against capsules: feet can poke through it, and it can bunch up on one side.
+- CI checks only the Node bridge: building the Unity project in CI needs a Unity license set up as a secret.
 
 ## Inspiration
 

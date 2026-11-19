@@ -1,7 +1,31 @@
+# Unity
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Bb]uild/
+/[Bb]uilds/
+/[Ll]ogs/
+/[Uu]ser[Ss]ettings/
+/[Mm]emoryCaptures/
+/[Rr]ecordings/
+*.csproj
+*.sln
+*.slnx
+*.pidb
+*.userprefs
+.vs/
+.idea/
+*.app
+crashlytics-build.properties
+
+# bridge (Node)
 node_modules
-dist
 .env.local
 .env.*.local
 .DS_Store
-# user-supplied avatar models (large, personal); drop your own .vrm files here
-public/*.vrm
+
+# user-supplied avatar models (large, personal): drop your own .vrm files here
+/Assets/Avatars/User/*.vrm
+/Assets/Avatars/User/*.vrm.meta
+/Screenshots/
+.vscode/
