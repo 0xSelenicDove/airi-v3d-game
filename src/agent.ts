@@ -23,7 +23,7 @@ type State =
    * seat's chair when it began
    */
   | { k: 'routine'; steps: Step[]; obj: WorldObject; aff: Affordance; t: number; from: Vec2; fromPose: Pose; fromHeading: number; doorFrom: number; chairFrom: number; started: boolean }
-  | { k: 'doing'; obj: WorldObject; aff: Affordance; left: number; orbitAngle?: number }
+  | { k: 'doing'; obj: WorldObject; aff: Affordance; left: number; orbitAngle?: number; finishAngle?: number }
   | { k: 'waiting'; left: number }
   /** acting out a gesture on the spot; `left` is in real seconds */
   | { k: 'gesturing'; gesture: Gesture; left: number }
@@ -280,7 +280,8 @@ export class Agent {
         const target = s.path[0]
         const d = dist(this.pos, target)
         // in the lake (wading in from the shore, or swimming back out) the agent swims, slower than it walks
-        const swimming = this.world.inWater(this.pos) || (s.aff.pose === 'swim' && !!s.onto)
+        // sitting in the boat is not swimming, even on the water
+        const swimming = s.aff.pose !== 'sit' && (this.world.inWater(this.pos) || (s.aff.pose === 'swim' && !!s.onto))
         this.pose = swimming ? 'swim' : 'stand'
         // the last step onto a seat goes into the furniture, where nobody else stands
         const onto = !!s.onto
@@ -365,20 +366,26 @@ export class Agent {
         break
       }
       case 'doing': {
-        const frac = Math.min(gameDt, s.left) / s.aff.duration
+        const frac = Math.max(0, Math.min(gameDt, s.left)) / s.aff.duration
         for (const [k, v] of Object.entries(s.aff.effects)) {
           this.needs[k as keyof Needs] = clamp(this.needs[k as keyof Needs] + v! * frac)
         }
         if (s.aff.orbit && s.orbitAngle !== undefined) {
-          // swimming laps: a circle whose east-most point is the use point, so the swimmer starts where it arrived
-          const r = s.aff.orbit
-          s.orbitAngle += (0.6 / r) * realDt
+          // swimming or rowing a loop: an ellipse whose east-most point is the use point, so it starts where it arrived
+          const rx = s.aff.orbit, rz = s.aff.orbitZ ?? rx
+          s.orbitAngle += ((s.aff.speed ?? 0.6) / ((rx + rz) / 2)) * realDt
+          if (s.finishAngle !== undefined) s.orbitAngle = Math.min(s.orbitAngle, s.finishAngle)
           const a = s.orbitAngle
-          this.pos = { x: s.obj.usePos.x - r + Math.cos(a) * r, z: s.obj.usePos.z + Math.sin(a) * r }
-          this.heading = Math.atan2(-Math.sin(a), Math.cos(a))
+          this.pos = { x: s.obj.usePos.x - rx + Math.cos(a) * rx, z: s.obj.usePos.z + Math.sin(a) * rz }
+          this.heading = Math.atan2(-rx * Math.sin(a), rz * Math.cos(a))
         }
         s.left -= gameDt
-        if (s.left <= 0) {
+        // a loop that must be finished (the boat goes back to its mooring) ends at the next full lap
+        if (s.left <= 0 && s.aff.lap && s.orbitAngle !== undefined && s.finishAngle === undefined) {
+          s.finishAngle = Math.ceil(s.orbitAngle / (2 * Math.PI) - 1e-9) * 2 * Math.PI
+        }
+        const loopDone = !s.aff.lap || (s.finishAngle !== undefined && s.orbitAngle! >= s.finishAngle)
+        if (s.left <= 0 && loopDone) {
           this.lastResult = `finished ${s.aff.verb} at ${s.obj.id}`
           this.log(this.lastResult)
           if (s.aff.pose === 'lie') {
