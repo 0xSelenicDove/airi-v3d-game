@@ -54,6 +54,39 @@ describe('AiriBrain', () => {
     expect(await pending).toEqual({ type: 'interact', object: 'bookshelf', verb: 'read' })
     expect(own.asked).toBe(1)
   })
+
+  it('lets the own brain decide once when AIRI gives no action within the autopilot time, and says so', async () => {
+    const own = new OwnBrain(), b = new AiriBrain(own, 30)
+    const told: Action[] = []
+    b.onAutopilot = a => told.push(a)
+    b.setControl(true)
+    const pending = b.decide(persona, obs)
+    expect(b.awaiting).toBe(true)
+    expect(await pending).toEqual({ type: 'interact', object: 'bookshelf', verb: 'read' })
+    expect(own.asked).toBe(1)
+    expect(told).toEqual([{ type: 'interact', object: 'bookshelf', verb: 'read' }])
+    expect(b.awaiting).toBe(false)
+    // AIRI is still in charge: the next decision waits for her again
+    b.decide(persona, obs)
+    expect(b.awaiting).toBe(true)
+    b.act({ type: 'wait', minutes: 5 })
+  })
+
+  it('does not take over when AIRI acts in time, or when the autopilot is off', async () => {
+    const own = new OwnBrain()
+    const quick = new AiriBrain(own, 40)
+    quick.setControl(true)
+    const p = quick.decide(persona, obs)
+    quick.act({ type: 'say', text: 'mine' })
+    expect(await p).toEqual({ type: 'say', text: 'mine' })
+    const never = new AiriBrain(own, 0)
+    never.setControl(true)
+    never.decide(persona, obs)
+    await new Promise(r => setTimeout(r, 80))
+    expect(never.awaiting).toBe(true)
+    expect(own.asked).toBe(0)
+    never.setControl(false)
+  })
 })
 
 describe('AIRI in the world', () => {

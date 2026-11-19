@@ -4,8 +4,9 @@
  *
  * The path is AIRI ⇄ MCP ⇄ bridge/airi-mcp.mjs ⇄ WebSocket ⇄ this page. AiriLink is the page's end of the
  * WebSocket: it answers the bridge's requests (status, look, act) and reports what happens to the character.
- * AiriBrain is that character's brain: while AIRI is connected, every decision waits for AIRI's next action, and
- * the character's own brain is not asked. Without AIRI it is the character's usual brain.
+ * AiriBrain is that character's brain: while AIRI is connected, every decision waits for AIRI's next action. AIRI's
+ * model acts only on its own turns, so when it gives no action within the autopilot time, the character's own brain
+ * makes that one decision (AIRI hears about it, and can change it at any time). Without AIRI it is the usual brain.
  */
 import type { Agent } from './agent'
 import type { Action, Brain, Observation, Persona } from './types'
@@ -16,6 +17,8 @@ import { EMOTIONS, GESTURES } from './acting'
 export const DEFAULT_BRIDGE = 'ws://127.0.0.1:8789'
 /** the character AIRI plays */
 export const AIRI_NAME = 'Airi'
+/** real seconds the character waits for AIRI's next action before its own brain decides (?airi&autopilot=<s>, 0: never) */
+export const AUTOPILOT_SECS = 60
 
 /** the brain of the character AIRI plays: AIRI's actions while AIRI is connected, the usual brain otherwise */
 export class AiriBrain implements Brain {
@@ -24,11 +27,14 @@ export class AiriBrain implements Brain {
   /** an action AIRI sent before the character was ready for it */
   private queued: Action | null = null
   /** the decision the character is waiting on, while AIRI has not acted yet */
-  private waiting: { persona: Persona; obs: Observation; resolve: (a: Action) => void; reject: (e: unknown) => void } | null = null
+  private waiting: Waiting | null = null
   /** told each time the character needs a decision (AiriLink passes it on as an event) */
   onTurn?: (obs: Observation) => void
+  /** told when the own brain decided because AIRI gave no action in time */
+  onAutopilot?: (a: Action) => void
 
-  constructor(private readonly own: Brain) {}
+  /** `autopilotMs`: how long to wait for AIRI before the own brain decides, 0 to wait for ever */
+  constructor(private readonly own: Brain, readonly autopilotMs = AUTOPILOT_SECS * 1000) {}
 
   get controlled() { return this.on }
   /** the character is standing by for AIRI's next action */
@@ -42,7 +48,17 @@ export class AiriBrain implements Brain {
       return Promise.resolve(a)
     }
     this.onTurn?.(obs)
-    return new Promise((resolve, reject) => { this.waiting = { persona, obs, resolve, reject } })
+    return new Promise((resolve, reject) => {
+      const w: Waiting = { persona, obs, resolve, reject }
+      if (this.autopilotMs > 0) {
+        w.timer = setTimeout(() => {
+          if (this.waiting !== w) return
+          this.waiting = null
+          this.own.decide(persona, obs).then(a => { this.onAutopilot?.(a); resolve(a) }, reject)
+        }, this.autopilotMs)
+      }
+      this.waiting = w
+    })
   }
 
   reflect(persona: Persona, memories: string[]) {
@@ -56,7 +72,10 @@ export class AiriBrain implements Brain {
     this.queued = null
     const w = this.waiting
     this.waiting = null
-    if (w) this.own.decide(w.persona, w.obs).then(w.resolve, w.reject)
+    if (w) {
+      clearTimeout(w.timer)
+      this.own.decide(w.persona, w.obs).then(w.resolve, w.reject)
+    }
   }
 
   /** AIRI's next action: taken now if the character is waiting for one, else when it next decides */
@@ -64,6 +83,7 @@ export class AiriBrain implements Brain {
     const w = this.waiting
     if (w) {
       this.waiting = null
+      clearTimeout(w.timer)
       w.resolve(a)
       return 'now'
     }
@@ -72,12 +92,21 @@ export class AiriBrain implements Brain {
   }
 }
 
+/** a decision the character is waiting on, and the autopilot timer for it */
+interface Waiting {
+  persona: Persona
+  obs: Observation
+  resolve: (a: Action) => void
+  reject: (e: unknown) => void
+  timer?: ReturnType<typeof setTimeout>
+}
+
 /** a request from the bridge, and the page's answer */
 type Request = { id: number; method: 'status' | 'look' | 'act'; params?: Record<string, unknown> }
 type FromBridge = Request | { type: 'control'; on: boolean }
 
 /** what an event tells AIRI: something the character noticed or did, or that it is waiting for a decision */
-export interface AiriEvent { time: string; kind: 'memory' | 'turn'; text: string }
+export interface AiriEvent { time: string; kind: 'memory' | 'turn' | 'autopilot'; text: string }
 
 /** The page's end of the bridge: connects, reconnects, answers requests and reports events. */
 export class AiriLink {
@@ -95,6 +124,10 @@ export class AiriLink {
   ) {
     this.seen = me.logged
     brain.onTurn = obs => this.send({ type: 'event', event: { time: obs.time, kind: 'turn', text: turnText(obs) } })
+    brain.onAutopilot = a => this.send({ type: 'event', event: {
+      time: world.clock, kind: 'autopilot',
+      text: `you gave no action for ${Math.round(brain.autopilotMs / 1000)} s, so ${me.name}'s own habits chose: ${actionText(a)} (act with interrupt: true to change it)`,
+    } })
     this.connect()
   }
 
@@ -169,6 +202,7 @@ export class AiriLink {
       name: a.name, doing: a.activity, place: this.world.placeOf(a.pos), pose: a.pose,
       needs: Object.fromEntries(Object.entries(a.needs).map(([k, v]) => [k, Math.round(v)])),
       waitingForYou: this.brain.awaiting,
+      autopilotSeconds: Math.round(this.brain.autopilotMs / 1000),
     }
   }
 
@@ -230,6 +264,16 @@ export class AiriLink {
       ...(result && { result }),
       doing: this.me.activity,
     }
+  }
+}
+
+/** an action in a few words, for an event */
+function actionText(a: Action) {
+  switch (a.type) {
+    case 'interact': return `${a.verb} at ${a.object}`
+    case 'say': return `say "${a.text}"`
+    case 'gesture': return `gesture ${a.gesture}`
+    case 'wait': return `wait ${a.minutes} min`
   }
 }
 

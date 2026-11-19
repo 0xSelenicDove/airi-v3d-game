@@ -121,9 +121,10 @@ AIRI gets these tools:
 | `world_status` | The time, what Airi and the others are doing and where, and the gestures and emotions `act` accepts |
 | `look` | What Airi sees: her needs, the things she can use (ids and verbs), people nearby, what she heard, her memories, the result of her last action |
 | `act` | Use an object, say something, act out a gesture, or wait. `interrupt: true` ends the current activity first |
-| `wait_for_event` | What happened since the last call: what Airi did and noticed, what she heard, and `turn` when she waits for a decision |
+| `wait_for_event` | What happened since the last call: what Airi did and noticed, what she heard, `turn` when she waits for a decision, and `autopilot` when her own brain decided |
 
-- While AIRI is connected, nobody else decides for Airi: she waits for AIRI's next action. When AIRI disconnects, Airi goes back to her own brain.
+- While AIRI is connected, Airi waits for AIRI's next action. AIRI's model acts only on its own turns, so when it gives no action for 60 s, Airi's own brain decides that one thing (autopilot). AIRI gets an `autopilot` event and can change it with `interrupt: true`. Change the time with `?airi&autopilot=<seconds>`, or turn it off with `autopilot=0`.
+- When AIRI disconnects, Airi goes back to her own brain.
 - The bridge listens only on 127.0.0.1. It accepts game pages from this computer and from the live demo only. Add another origin with `--origin`.
 - Change the ports with `--ws <port>` (default 8789) and `--http <port>` (default for `npm run airi-bridge`: 8790). With another WebSocket port, open the game with `?airi=ws://127.0.0.1:<port>`.
 - Keep the game tab visible. Browsers pause background tabs, and then the game cannot answer.
