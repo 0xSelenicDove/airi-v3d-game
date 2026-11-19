@@ -93,6 +93,40 @@ public/model2.vrm   # 第二个 AI（Luna）
 - 所有请求都由浏览器直接发出。如果你的服务器拦截跨域请求，请允许 `http://localhost:5173`（Ollama 需要设置 `OLLAMA_ORIGINS`）。
 - 任何 `VITE_` 开头的变量都会暴露在浏览器里，请不要在这里放正式环境的 API 密钥。
 
+## 让 AIRI 进入这个世界（MCP）
+
+[AIRI](https://github.com/moeru-ai/airi) 或任何其他 MCP 客户端，都可以作为 **Airi** 生活在这个世界里，由自己做决定。Luna 仍然是 NPC，用她自己的大脑。
+
+```
+AIRI ⇄ MCP（stdio 或 HTTP）⇄ bridge/airi-mcp.mjs ⇄ WebSocket（127.0.0.1:8789）⇄ 游戏页面（?airi）
+```
+
+1. 在本仓库运行 `npm install`。
+2. 在 AIRI 的 MCP 服务器设置（它的 `mcp.json`）里添加桥接，二选一：
+   - stdio：由 AIRI 自己启动桥接。
+     ```json
+     { "mcpServers": { "airi-v3d-game": { "command": "node", "args": ["<airi-v3d-game 的路径>/bridge/airi-mcp.mjs"] } } }
+     ```
+   - HTTP：先用 `npm run airi-bridge` 启动桥接，再让 AIRI 连接这个地址。
+     ```json
+     { "mcpServers": { "airi-v3d-game": { "url": "http://127.0.0.1:8790/mcp" } } }
+     ```
+3. 在地址后面加上 `?airi` 打开游戏，例如 `http://localhost:5173/?airi`，在线演示也可以加 `?airi`。HUD 会显示 `AIRI: connected, playing Airi`。
+
+AIRI 可以使用这些工具：
+
+| 工具 | 作用 |
+| --- | --- |
+| `world_status` | 当前时间、Airi 和其他人在做什么、在哪里，以及 `act` 支持的动作和表情 |
+| `look` | Airi 看到的情况：需求、可以使用的东西（id 和动词）、附近的人、听到的话、记忆、上一个行动的结果 |
+| `act` | 使用物品、说话、做动作或等待。`interrupt: true` 会先结束当前的活动 |
+| `wait_for_event` | 上次调用之后发生的事：Airi 做了什么、注意到什么、听到什么；轮到她做决定时会有 `turn` 事件 |
+
+- AIRI 连接期间，没有别人替 Airi 做决定，她会等待 AIRI 的下一个行动。AIRI 断开后，Airi 会回到自己的大脑。
+- 桥接只监听 127.0.0.1，只接受来自本机和在线演示的游戏页面。可以用 `--origin` 添加其他来源。
+- 用 `--ws <端口>`（默认 8789）和 `--http <端口>`（`npm run airi-bridge` 默认 8790）修改端口。改了 WebSocket 端口时，用 `?airi=ws://127.0.0.1:<端口>` 打开游戏。
+- 游戏标签页要保持在前台。浏览器会暂停后台标签页，那时游戏无法响应。
+
 ## 工作原理
 
 ```
@@ -112,6 +146,7 @@ World（时钟、物体、占用、说话） ── Agent（需求、状态机�
 | [`src/acting.ts`](src/acting.ts) | AI 能表演的动作和表情，以及大模型可以使用的说法和标签 |
 | [`src/physics.ts`](src/physics.ts) | Rapier 物理世界：实体场景、AI 的身体、沙滩球，以及动作的空间检测 |
 | [`src/brain.ts`](src/brain.ts) | `MockBrain`、`LLMBrain`、JSON 动作解析 |
+| [`src/airi.ts`](src/airi.ts) | AIRI 进入世界：由 AIRI 驱动的大脑，以及页面与 MCP 桥接（[`bridge/airi-mcp.mjs`](bridge/airi-mcp.mjs)）的连接 |
 | [`src/memory.ts`](src/memory.ts) | 记忆流、评分检索、淘汰、序列化 |
 | [`src/avatar.ts`](src/avatar.ts) | VRM 加载、程序化动画、名字标签和气泡 |
 | [`src/main.ts`](src/main.ts) | 场景、房间模型、相机、持久化、调试层 |

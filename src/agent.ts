@@ -60,7 +60,10 @@ export class Agent {
   /** called whenever this agent says something aloud (used for text-to-speech) */
   onSay?: (text: string) => void
   thoughtUntil = 0
-  private lastResult?: string
+  /** what came of the last action, fed back with the next observation */
+  lastResult?: string
+  /** lines added to `memory` so far (it keeps only the last 50), so a reader can tell which are new */
+  logged = 0
   private inbox: string[] = []
   private claimed?: string
   pose: 'stand' | 'sit' | 'lie' | 'swim' = 'stand'
@@ -209,6 +212,7 @@ export class Agent {
   private log(msg: string, importance = 2) {
     this.mem.add(this.world.minutes, msg, importance)
     this.memory.push(`${this.world.clock}  ${msg}`)
+    this.logged++
     if (this.memory.length > 50) this.memory.shift()
   }
 
@@ -233,13 +237,36 @@ export class Agent {
         if (this.mem.reflections(20).some(r => r.text === t)) return
         this.mem.add(this.world.minutes, t, 8, 'reflection')
         this.memory.push(`${this.world.clock}  🧠 ${t}`)
+        this.logged++
       }))
       .catch(e => console.warn('reflect failed', e))
       .finally(() => (this.reflecting = false))
   }
 
-  private observe(): Observation {
-    const inbox = this.inbox.splice(0)
+  /** what this agent sees right now, keeping what it heard for its next decision (AIRI's look tool, airi.ts) */
+  look(): Observation {
+    return this.observe(false)
+  }
+
+  /**
+   * End what it is doing early, as if its time were up: it gets up the usual way, then decides again. A plain walk
+   * stops where it is, giving up what it was going to. Returns false when there is nothing that can end now: a
+   * skill's moves (passing the door, getting into a seat) finish first, so nobody is left halfway.
+   */
+  stopActivity() {
+    const s = this.state
+    if (s.k === 'doing' || s.k === 'waiting') { s.left = 0; return true }
+    if (s.k === 'moving' && !s.busy && !s.exact && !s.onto && this.pose === 'stand') {
+      this.release()
+      this.speedNow = 0
+      this.state = { k: 'idle' }
+      return true
+    }
+    return false
+  }
+
+  private observe(consume = true): Observation {
+    const inbox = consume ? this.inbox.splice(0) : [...this.inbox]
     return {
       time: this.world.clock,
       hour: this.world.hour,
