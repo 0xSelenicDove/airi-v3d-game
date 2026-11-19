@@ -3,7 +3,7 @@ import { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import {
   VRM, VRMLoaderPlugin, VRMUtils, VRMSpringBoneCollider, VRMSpringBoneColliderShapeCapsule, VRMSpringBoneColliderShapePlane, VRMSpringBoneColliderShapeSphere,
-  type VRMSpringBoneColliderGroup,
+  type VRMSpringBoneColliderGroup, type VRMSpringBoneJoint,
 } from '@pixiv/three-vrm'
 import { JUMP_AIR, JUMP_CROUCH, WALK_SPEED, type Agent } from './agent'
 import type { Emotion, Gesture } from './acting'
@@ -28,6 +28,7 @@ export class Avatar {
    */
   private bedGroup?: VRMSpringBoneColliderGroup
   private bedCollider?: VRMSpringBoneCollider
+  private bedShape?: VRMSpringBoneColliderShapeCapsule
   /** VRM 0.x rigs face -Z, so bone-local X and Z rotations are mirrored compared with VRM 1.0 */
   private v0 = false
   private hipsY = 0.9
@@ -176,11 +177,12 @@ export class Avatar {
 
     // a big capsule lying along the bed (the avatar's local z while lying), its top at BED_TOP: a wide, shallow
     // curve, so what hangs over the side slides down beside the frame, and nothing is held up in mid air
-    const slab = new VRMSpringBoneCollider(new VRMSpringBoneColliderShapeCapsule({
+    this.bedShape = new VRMSpringBoneColliderShapeCapsule({
       radius: BED_RADIUS,
       offset: new THREE.Vector3(0, BED_TOP - BED_RADIUS, -1.1),
       tail: new THREE.Vector3(0, BED_TOP - BED_RADIUS, 1.1),
-    }))
+    })
+    const slab = new VRMSpringBoneCollider(this.bedShape)
     this.root.add(slab)
     this.bedCollider = slab
     this.bedGroup = { colliders: [slab], name: 'bed' }
@@ -193,6 +195,14 @@ export class Avatar {
       st.gravityPower = Math.max(st.gravityPower, MIN_GRAVITY)
       st.dragForce = Math.max(st.dragForce, MIN_DRAG)
     }
+    // the hair: spring joints under the head (lying down treats it differently, see layHair)
+    const headBone = vrm.humanoid.getRawBoneNode('head')
+    const underHead = (o: THREE.Object3D | null) => { for (let p = o?.parent; p; p = p.parent) if (p === headBone) return true; return false }
+    this.hairDown = false
+    this.hair = [...(vrm.springBoneManager?.joints ?? [])].filter(j => underHead(j.bone)).map(joint => ({
+      joint, stiffness: joint.settings.stiffness, gravityPower: joint.settings.gravityPower,
+      dragForce: joint.settings.dragForce, gravityDir: joint.settings.gravityDir.clone(),
+    }))
     // furniture and walls near the hair and clothes: big spheres touching the surfaces that rays from the head and
     // the hips hit (see probeSurroundings), so they push only near that surface; plus the floor. Unused spheres
     // are parked far below.
@@ -260,7 +270,7 @@ export class Avatar {
     const stride = Math.max(moving && !glide ? agent.speedNow : 0, glide ? covered : 0)
     const verb = st.k === 'doing' ? st.aff.verb : ''
     const sit = agent.pose === 'sit', lie = agent.pose === 'lie', swim = agent.pose === 'swim'
-    const rise = agent.rise
+    const rise = agent.rise, recline = agent.recline
     const speaking = !!agent.speech && now < agent.speechUntil
 
     // smooth heading (shortest way round)
@@ -301,6 +311,15 @@ export class Avatar {
       P('leftUpperLeg', Math.sin(sw * 2.4) * 0.35, 0, -0.03); P('rightUpperLeg', -Math.sin(sw * 2.4) * 0.35, 0, 0.03)
       P('leftLowerLeg', Math.max(0, -Math.sin(sw * 2.4)) * 0.5); P('rightLowerLeg', Math.max(0, Math.sin(sw * 2.4)) * 0.5)
       P('leftFoot', 0.3); P('rightFoot', 0.3)
+    } else if (recline !== null) {
+      // sitting up in bed or lying down: the thighs stay level on the bed while the back swings about the hips (see
+      // the body placement below), so they bend at the hips by as much as the back is up; the knees bend over the
+      // edge only in the second half, once the legs have turned out over it
+      const knee = Math.min(1, Math.max(0, (recline - 0.4) / 0.6)), kn = knee * knee * (3 - 2 * knee)
+      const th = recline * Math.PI / 2
+      P('leftUpperLeg', -th, 0.1 * recline, -0.05 * recline, 1); P('rightUpperLeg', -th, -0.1 * recline, 0.05 * recline, 1)
+      P('leftLowerLeg', (Math.PI / 2 - 0.1) * kn, 0, 0, 1); P('rightLowerLeg', (Math.PI / 2 - 0.1) * kn, 0, 0, 1)
+      P('leftFoot', 0.1 * kn, 0, 0, 1); P('rightFoot', 0.1 * kn, 0, 0, 1)
     } else if (rise) {
       // sitting down or standing up: the thighs swing between level and upright about knees over the feet, the
       // shins stay upright, so the feet stay where they are (the agent moves the body to match, agent.ts)
@@ -404,8 +423,9 @@ export class Avatar {
     }
     // ---- motion clips (clips.ts): walking, and standing about while not talking, from captured motion; the
     // pose above blends into the clip, and everything below goes on top of it ----
-    // getting up or sitting down leans the body forward over the feet, most as the hips leave the seat
-    if (rise) P('spine', 0.45 * Math.sin(rise.u * Math.PI), 0, 0, 1)
+    // getting up or sitting down leans the body forward over the feet, most as the hips leave the seat (eased in,
+    // so a bend left from a gesture before it, such as putting the shoes on, unwinds instead of snapping back)
+    if (rise) P('spine', 0.45 * Math.sin(rise.u * Math.PI))
     const idleStand = !moving && !posing && !sit && !lie && !swim && verb !== 'use_computer' && verb !== 'read' && !speaking
     const clipKind = moving && agent.pose === 'stand' ? 'walk' : idleStand ? 'idle' : null
     const clipRate = clipKind === 'walk'
@@ -416,7 +436,8 @@ export class Avatar {
     // play and fade back out at the end, instead of settling halfway between two targets ----
     const playing = agent.gesture && now < agent.gestureUntil && !lie && !swim ? agent.gesture : ''
     if (playing) this.gestureNow = playing
-    this.gestureW += ((playing ? 1 : 0) - this.gestureW) * (1 - Math.exp(-dt * 9))
+    // in over about 0.3 s, out over about 0.6 s: a movement ends by settling, not by springing back
+    this.gestureW += ((playing ? 1 : 0) - this.gestureW) * (1 - Math.exp(-dt * (playing ? 9 : 5)))
     const gw = this.gestureW > 0.01 ? this.gestureW : 0
     const gElapsed = (now - agent.gestureStart) / 1000
     const gu = Math.min(1, Math.max(0, (now - agent.gestureStart) / Math.max(1, agent.gestureUntil - agent.gestureStart)))
@@ -467,12 +488,22 @@ export class Avatar {
     // lying pivots about the feet, so slide the body along its length to centre the hips on the bed
     const tgtZ = lie ? this.hipsY * 0.95 : swim ? -this.hipsY * 0.95 : sit ? -0.12 : 0
     const kp = 1 - Math.exp(-dt * 7)
-    this.cur.pitch += (tgtPitch - this.cur.pitch) * kp
-    if (rise) {
+    if (recline !== null) {
+      // sitting up or lying down: the back swings about the hips, which go straight from where they lie to where
+      // they sit (the body pivots about the feet, so take the pitch's own lift and shift back out)
+      const p = -Math.PI / 2 * (1 - recline), h = this.hipsY
+      const lieY = this.lieHeight(agent, physics), sitY = this.sitHeight(agent, physics) - h
+      const lieZ = h * 0.95 - h, sitZ = -0.12
+      this.cur.pitch = p
+      this.cur.y = lieY + (sitY + h - lieY) * recline - h * Math.cos(p)
+      this.cur.z = lieZ + (sitZ - lieZ) * recline - h * Math.sin(p)
+    } else if (rise) {
       // the hips rise with the thighs' swing (the sine of it), straight from the seat's height, not eased behind
+      this.cur.pitch += (tgtPitch - this.cur.pitch) * kp
       this.cur.y = (this.sitHeight(agent, physics) - this.hipsY) * (1 - Math.sin(rise.u * Math.PI / 2))
       this.cur.z = -0.12 * (1 - rise.u)
     } else {
+      this.cur.pitch += (tgtPitch - this.cur.pitch) * kp
       this.cur.y += (tgtY - this.cur.y) * kp
       this.cur.z += (tgtZ - this.cur.z) * kp
     }
@@ -511,7 +542,8 @@ export class Avatar {
       }
       em.setValue('aa', speaking ? Math.max(0, 0.25 + Math.sin(t * 14) * 0.25 + Math.sin(t * 9.3) * 0.15) : 0)
     }
-    this.setBedCollision(lie)
+    this.setBedCollision(lie || recline !== null)
+    this.layHair(lie || (recline !== null && recline < 0.5))
     this.showShoes(agent.shoesOn)
     this.probeSurroundings(dt, agent, physics)
     this.feetOnFloor(dt, sit)
@@ -604,7 +636,9 @@ export class Avatar {
         P(`${n}UpperLeg` as BoneName, -Math.PI / 2 - SHOE_LIFT.thigh * lift, SHOE_LIFT.twist * lift * side, SHOE_LIFT.out * lift * side, w)
         P(`${n}LowerLeg` as BoneName, Math.PI / 2 - 0.1 + SHOE_LIFT.knee * lift, 0, 0, w)
         P(`${n}Foot` as BoneName, 0.3 * lift, 0, 0, w)
-        P('spine', SHOE_LIFT.spine, 0, 0, w); P('chest', SHOE_LIFT.chest, 0, 0, w)
+        // bend down over the first half second and come back up over the last, not in a few frames
+        const b = Math.min(1, u / 0.15, (1 - u) / 0.15), bend = b * b * (3 - 2 * b)
+        P('spine', SHOE_LIFT.spine * bend, 0, 0, w); P('chest', SHOE_LIFT.chest * bend, 0, 0, w)
         arm(1, [-0.9, 0, 1.15], [0, 0.3, 0]); arm(-1, [-0.9, 0, 1.15], [0, 0.3, 0])
         return 0
       }
@@ -880,7 +914,43 @@ export class Avatar {
       else if (!on && i >= 0) j.colliderGroups.splice(i, 1)
     }
   }
+
+  /** the hair's spring joints (those under the head) and their own settings, to give back after lying down */
+  private hair: { joint: VRMSpringBoneJoint; stiffness: number; gravityPower: number; dragForce: number; gravityDir: THREE.Vector3 }[] = []
+  private hairDown = false
+
+  /**
+   * Lying down, long hair keeps the shape it has standing (down the back, toward the feet), so the body pushes it up
+   * and it floats over the chest. While lying, make it soft and heavy and let it fall toward the head end of the bed:
+   * it spreads over the pillow. Getting up gives the model's own settings back.
+   */
+  private layHair(on: boolean) {
+    if (on !== this.hairDown) {
+      this.hairDown = on
+      for (const h of this.hair) {
+        const st = h.joint.settings
+        st.stiffness = on ? HAIR_LYING.stiffness : h.stiffness
+        st.gravityPower = on ? HAIR_LYING.gravity : h.gravityPower
+        st.dragForce = on ? HAIR_LYING.drag : h.dragForce
+        if (!on) st.gravityDir.copy(h.gravityDir)
+      }
+    }
+    if (!on || !this.hair.length) return
+    // the hair rests on the pillow, which is higher than the mattress: lift the bed's slab to the top under the head
+    const top = this.bedTop + HAIR_LYING.above - BED_RADIUS
+    this.bedShape?.offset.setY(top)
+    this.bedShape?.tail.setY(top)
+    const head = this.bone('head'), hips = this.bone('hips')
+    if (!head || !hips) return
+    const d = head.getWorldPosition(new THREE.Vector3()).sub(hips.getWorldPosition(new THREE.Vector3())).setY(0)
+    if (d.lengthSq() < 1e-6) return
+    const dir = d.normalize().multiplyScalar(HAIR_LYING.toHead).setY(-1).normalize()
+    for (const h of this.hair) h.joint.settings.gravityDir.copy(dir)
+  }
 }
+
+/** hair lying in bed: soft, heavy, slow, and pulled this much toward the head end for each unit down */
+const HAIR_LYING = { stiffness: 0.12, gravity: 1.0, drag: 0.6, toHead: 1.2, above: 0.015 }
 
 /** top of the beds and cots (the mattress is 0.5 m, see tools/blender/build_room.py), and the curve radius of the slab */
 const BED_TOP = 0.5

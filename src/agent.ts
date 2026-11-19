@@ -19,9 +19,10 @@ type State =
   | { k: 'moving'; path: Vec2[]; obj: WorldObject; aff: Affordance; next?: Step[]; exact?: boolean; onto?: boolean; busy?: boolean }
   /**
    * running the steps of a skill (skills/): `t` is real seconds into the current step; `from`, `fromPose`,
-   * `doorFrom` and `chairFrom` are where the body was, its pose, the door and the seat's chair when it began
+   * `fromHeading`, `doorFrom` and `chairFrom` are where the body was, its pose and heading, the door and the
+   * seat's chair when it began
    */
-  | { k: 'routine'; steps: Step[]; obj: WorldObject; aff: Affordance; t: number; from: Vec2; fromPose: Pose; doorFrom: number; chairFrom: number; started: boolean }
+  | { k: 'routine'; steps: Step[]; obj: WorldObject; aff: Affordance; t: number; from: Vec2; fromPose: Pose; fromHeading: number; doorFrom: number; chairFrom: number; started: boolean }
   | { k: 'doing'; obj: WorldObject; aff: Affordance; left: number; orbitAngle?: number }
   | { k: 'waiting'; left: number }
   /** acting out a gesture on the spot; `left` is in real seconds */
@@ -81,6 +82,8 @@ export class Agent {
    * find its height). The avatar keeps the feet where they are and swings the hips up over them. Null at other times.
    */
   rise: { u: number; seat: Vec2 } | null = null
+  /** sitting up in bed or lying down: how far up the back is, 0 (lying) .. 1 (sitting). Null at other times. */
+  recline: number | null = null
   gestureStart = 0
   gestureUntil = 0
   /** facial emotion shown until `emotionUntil` (performance.now ms) */
@@ -506,7 +509,7 @@ export class Agent {
 
   private startRoutine(steps: Step[], obj: WorldObject, aff: Affordance) {
     this.state = {
-      k: 'routine', steps: [...steps], obj, aff, t: 0, from: { ...this.pos }, fromPose: this.pose,
+      k: 'routine', steps: [...steps], obj, aff, t: 0, from: { ...this.pos }, fromPose: this.pose, fromHeading: this.heading,
       doorFrom: this.world.doorOpen, chairFrom: chairOut(this.world, obj), started: false,
     }
     this.runStep(0)
@@ -529,6 +532,7 @@ export class Agent {
     s.t = 0
     s.from = { ...this.pos }
     s.fromPose = this.pose
+    s.fromHeading = this.heading
     s.chairFrom = chairOut(this.world, s.obj)
     s.started = false
   }
@@ -591,7 +595,11 @@ export class Agent {
             s.started = false
             continue
           }
-          if (first) { this.pose = step.pose; this.heading = step.heading }
+          const sitUp = s.fromPose === 'lie' && step.pose === 'sit', lieDown = s.fromPose === 'sit' && step.pose === 'lie'
+          if (first) {
+            this.pose = step.pose
+            if (!sitUp && !lieDown) this.heading = step.heading
+          }
           const k = Math.min(1, s.t / step.secs), e = k * k * (3 - 2 * k)
           let f = e
           const up = s.fromPose === 'sit' && step.pose === 'stand', down = s.fromPose === 'stand' && step.pose === 'sit'
@@ -601,6 +609,14 @@ export class Agent {
             const u = up ? e : 1 - e
             f = up ? 1 - Math.cos(u * Math.PI / 2) : Math.cos(u * Math.PI / 2)
             this.rise = k < 1 ? { u, seat: { ...s.obj.usePos } } : null
+          }
+          if (sitUp || lieDown) {
+            // the back swings up from the bed (or down onto it) about the hips while the body turns, so the legs
+            // swing over the edge; the turn is done a little before the end, when the knees bend (avatar.ts)
+            this.recline = k < 1 ? (sitUp ? e : 1 - e) : null
+            const kt = Math.min(1, k / 0.8), et = kt * kt * (3 - 2 * kt)
+            const turn = Math.atan2(Math.sin(step.heading - s.fromHeading), Math.cos(step.heading - s.fromHeading))
+            this.heading = s.fromHeading + turn * et
           }
           this.pos = { x: s.from.x + (step.at.x - s.from.x) * f, z: s.from.z + (step.at.z - s.from.z) * f }
           if (k < 1) return

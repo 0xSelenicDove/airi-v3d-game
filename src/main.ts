@@ -140,7 +140,8 @@ physicsReady.then(p => {
   }
 })
 const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 100)
-const HOME = { pos: new THREE.Vector3(0, 9, 11), target: new THREE.Vector3(0, 0.5, 0) }
+// looking down on the room from about 50° above the floor
+const HOME = { pos: new THREE.Vector3(0, 11, 8.5), target: new THREE.Vector3(0, 0.5, 0) }
 camera.position.copy(HOME.pos)
 
 // orbit: drag = rotate, right-drag = pan, wheel = zoom. F cycles follow-cam, R resets the view.
@@ -150,7 +151,7 @@ controls.enableDamping = true
 controls.dampingFactor = 0.08
 controls.minDistance = 1.5
 controls.maxDistance = 24
-controls.maxPolarAngle = Math.PI / 2 - 0.05 // stay above the floor
+controls.maxPolarAngle = 1.1 // at least about 27° above the floor: never a low view across the room
 controls.update()
 let follow = -1 // -1 = free camera, otherwise agent index
 // moving the camera by hand ends the follow-cam, so the view is never held on someone

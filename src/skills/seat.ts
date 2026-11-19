@@ -101,7 +101,7 @@ export function sitDown(world: World, obj: WorldObject): Step[] {
       { do: 'squeeze', to: p.corner },
       { do: 'squeeze', to: p.stand },
       { do: 'face', heading: face, secs: 0.3 },
-      { do: 'pose', pose: 'sit', at: p.seat, heading: face, secs: 0.9 },
+      { do: 'pose', pose: 'sit', at: p.seat, heading: face, secs: 1.2 },
       { do: 'act', motion: 'move_chair', secs: 0.8, slide: { ...obj.usePos }, chairTo: 0 },
       { do: 'use' },
     ]
@@ -110,7 +110,7 @@ export function sitDown(world: World, obj: WorldObject): Step[] {
     { do: 'walk', to: { ...obj.approach! } },
     { do: 'squeeze', to: seatFront(world, obj) },
     { do: 'face', heading: face, secs: 0.4 },
-    { do: 'pose', pose: 'sit', at: { ...obj.usePos }, heading: face, secs: 0.9 },
+    { do: 'pose', pose: 'sit', at: { ...obj.usePos }, heading: face, secs: 1.2 },
     { do: 'use' },
   ]
 }
@@ -122,7 +122,7 @@ export function standUp(world: World, obj: WorldObject): Step[] {
     const p = chairPlan(world, obj)
     return [
       { do: 'act', motion: 'move_chair', secs: 0.8, slide: p.seat, chairTo: PULL },
-      { do: 'pose', pose: 'stand', at: p.stand, heading: face, secs: 0.9 },
+      { do: 'pose', pose: 'stand', at: p.stand, heading: face, secs: 1.2 },
       { do: 'squeeze', to: p.corner },
       { do: 'squeeze', to: p.side },
       { do: 'face', heading: p.toChair, secs: 0.3 },
@@ -131,7 +131,7 @@ export function standUp(world: World, obj: WorldObject): Step[] {
     ]
   }
   return [
-    { do: 'pose', pose: 'stand', at: seatFront(world, obj), heading: face, secs: 0.9 },
+    { do: 'pose', pose: 'stand', at: seatFront(world, obj), heading: face, secs: 1.2 },
     { do: 'squeeze', to: { ...obj.approach! } },
   ]
 }

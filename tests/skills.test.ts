@@ -66,10 +66,21 @@ describe('R1, R2: going to bed and getting up', () => {
       expect(w.clearance(s.pos)).toBeGreaterThanOrEqual(dist(s.pos, spot) < 0.15 ? 0.12 : 0.19)
     }
 
-    // wake up
+    // wake up: sit up slowly, turning to the edge as the back comes up, not in a jump
     seen.length = 0
     if (a.state.k === 'doing') a.state.left = 0.1
-    run([a], () => a.state.k === 'waiting' || a.state.k === 'thinking', record)
+    const rising: { r: number; heading: number }[] = []
+    run([a], () => a.state.k === 'waiting' || a.state.k === 'thinking', () => {
+      record()
+      if (a.recline !== null) rising.push({ r: a.recline, heading: a.heading })
+    })
+    expect(rising.length * DT).toBeGreaterThan(1.5)
+    for (let i = 1; i < rising.length; i++) {
+      expect(rising[i].r).toBeGreaterThanOrEqual(rising[i - 1].r)
+      const turn = Math.atan2(Math.sin(rising[i].heading - rising[i - 1].heading), Math.cos(rising[i].heading - rising[i - 1].heading))
+      expect(Math.abs(turn)).toBeLessThan(0.1)
+    }
+    expect(a.recline).toBeNull()
     const sitUp = seen.findIndex(s => s.pose === 'sit'), stoodUp = seen.findIndex(s => s.pose === 'stand')
     expect(sitUp).toBeGreaterThan(-1)
     expect(sitUp).toBeLessThan(stoodUp)                           // sits up on the edge before standing (R2)

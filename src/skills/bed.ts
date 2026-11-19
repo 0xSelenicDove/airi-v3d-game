@@ -131,9 +131,9 @@ export function lieDown(world: World, obj: WorldObject, _aff: Affordance): Step[
     ...rest.map((to): Step => ({ do: 'squeeze', to })),
     { do: 'squeeze', to: overFeet(b) },
     { do: 'face', heading: b.out, secs: 0.4 },
-    { do: 'pose', pose: 'sit', at: b.sit, heading: b.out, secs: 0.9 },
+    { do: 'pose', pose: 'sit', at: b.sit, heading: b.out, secs: 1.2 },
     { do: 'act', motion: 'shoes', secs: 3.2, shoes: 'off', reach: 'feet' },
-    { do: 'pose', pose: 'lie', at: obj.usePos, heading: LIE_HEADING, secs: 1.2 },
+    { do: 'pose', pose: 'lie', at: obj.usePos, heading: LIE_HEADING, secs: 2.0 },
     { do: 'use' },
   ]
 }
@@ -143,9 +143,9 @@ export function getUp(world: World, obj: WorldObject): Step[] {
   const b = bedside(world, obj)
   const back = [...b.way].reverse().slice(1)
   return [
-    { do: 'pose', pose: 'sit', at: b.sit, heading: b.out, secs: 1.0 },
+    { do: 'pose', pose: 'sit', at: b.sit, heading: b.out, secs: 2.0 },
     { do: 'act', motion: 'shoes', secs: 3.2, shoes: 'on', reach: 'feet' },
-    { do: 'pose', pose: 'stand', at: overFeet(b), heading: b.out, secs: 0.9 },
+    { do: 'pose', pose: 'stand', at: overFeet(b), heading: b.out, secs: 1.2 },
     { do: 'squeeze', to: b.stand },
     ...back.map((to): Step => ({ do: 'squeeze', to })),
   ]
