@@ -12,7 +12,7 @@ import { Avatar } from './avatar'
 import { MotionLibrary } from './clips'
 import { MemoryStream } from './memory'
 import { Speaker, type VoiceStyle } from './tts'
-import type { Persona } from './types'
+import type { Persona, TableChair } from './types'
 
 const world = new World()
 // Configure via .env (see .env.example). Without VITE_LLM_URL the mock brain is used.
@@ -153,6 +153,8 @@ controls.maxDistance = 24
 controls.maxPolarAngle = Math.PI / 2 - 0.05 // stay above the floor
 controls.update()
 let follow = -1 // -1 = free camera, otherwise agent index
+// moving the camera by hand ends the follow-cam, so the view is never held on someone
+controls.addEventListener('start', () => { follow = -1 })
 
 const hemi = new THREE.HemisphereLight(0xffffff, 0x445566, 0.6)
 const sun = new THREE.DirectionalLight(0xffffff, 1.2)
@@ -173,6 +175,7 @@ const GHOST = 0.08 // opacity of a wall that is in the way
 const walls: { meshes: THREE.Mesh[]; hide: () => boolean; fade: number }[] = []
 const lampLights: THREE.PointLight[] = []
 let doorLeaf: THREE.Object3D | undefined
+const chairs: { node: THREE.Object3D; rest: THREE.Vector3; chair: TableChair }[] = []
 // outdoor lights from the yard layout (the campfire, the tent lantern): off by day, on after dark
 const outdoorLights = world.lights.map(l => {
   const light = new THREE.PointLight(l.color, 0, l.distance, 2)
@@ -218,6 +221,11 @@ new GLTFLoader().load(`${import.meta.env.BASE_URL}models/room.glb`, gltf => {
       Math.abs(Number(doorLeaf.userData.open_angle ?? 0) - DOOR_LEAF.openDeg) > 1) {
       console.warn('room.glb DOOR_leaf no longer matches DOOR_LEAF in src/skills/door.ts', { at: doorLeaf.position, width })
     }
+  }
+  // chairs at a table slide out and back in as people sit down and get up (skills/seat.ts sets world.chairOut)
+  for (const o of world.objects) {
+    const node = o.chair && gltf.scene.getObjectByName(o.chair.node)
+    if (o.chair && node) chairs.push({ node, rest: node.position.clone(), chair: o.chair })
   }
   scene.add(gltf.scene)
   // the lamps glow warm at night, the glow fades out with the daylight (see frame())
@@ -374,6 +382,10 @@ function frame(now: number) {
     l.light.intensity = (1 - daylight) * l.base * (1 + flick)
   }
   if (doorLeaf) doorLeaf.rotation.y = doorAngle * world.doorOpen
+  for (const c of chairs) {
+    const k = world.chairOut.get(c.chair.furniture) ?? 0
+    c.node.position.set(c.rest.x + c.chair.out.x * k, c.rest.y, c.rest.z + c.chair.out.z * k)
+  }
   if (physics) {
     // the leaf is solid too: balls bounce off it, and gestures see it (R0)
     const [a, b] = leaf(world, world.doorOpen)

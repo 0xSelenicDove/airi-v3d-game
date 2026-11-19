@@ -52,6 +52,13 @@ export class MotionLibrary {
   }
 }
 
+/**
+ * Bones the clips leave alone: the avatar sets the head and neck (looking at people, nodding) and the fingers
+ * after the clip, each frame. A clip under them mixed with that pose by an amount that depended on the frame time,
+ * so the head twitched when a frame took longer.
+ */
+const OWN_BONES = /^(?:head|neck|(?:left|right)(?:Thumb|Index|Middle|Ring|Little))/
+
 /** one clip, bound to one avatar's bones, sampled by hand so it can blend with the avatar's own pose */
 class BoundClip {
   readonly duration: number
@@ -63,6 +70,7 @@ class BoundClip {
     const meta = vrm.meta.metaVersion === '0' ? '0' : '1'
     const tracks = createVRMAnimationHumanoidTracks(anim, vrm.humanoid, meta)
     for (const [bone, track] of tracks.rotation) {
+      if (OWN_BONES.test(bone)) continue
       const node = vrm.humanoid.getNormalizedBoneNode(bone)
       if (node) this.bones.push({ node, sample: track.InterpolantFactoryMethodLinear() })
     }

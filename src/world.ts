@@ -20,6 +20,8 @@ export class World {
   doorOpen = 0
   /** who is using the door right now, so two people do not open and close it at the same time */
   doorUser?: string
+  /** how far each chair at a table is pulled out, metres, by furniture id (skills/seat.ts); main.ts moves the model */
+  readonly chairOut = new Map<string, number>()
   /** loose things on the ground (the beach balls), kept up to date from the physics world by main.ts */
   props: { x: number; z: number; r: number }[] = []
   /** objectId -> agent name; sitting/lying objects fit one agent at a time */

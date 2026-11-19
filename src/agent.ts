@@ -2,10 +2,10 @@ import type { Action, Brain, Needs, Observation, Persona, Vec2, Vec3, WorldObjec
 import { World, clamp, dist } from './world'
 import { MemoryStream } from './memory'
 import { GESTURE_INFO, emotionOf, gestureOf, type Emotion, type Gesture } from './acting'
-import type { SkillMotion, Step } from './skills'
+import type { Pose, SkillMotion, Step } from './skills'
 import { getUp, lieDown } from './skills/bed'
 import { besideDoor, crossesDoor, doorSpots, handle, inSwing, openAt, throughDoor } from './skills/door'
-import { sitDown, standUp } from './skills/seat'
+import { chairOut, chairTop, sitDown, standUp } from './skills/seat'
 import { DETOUR_TRIES, DETOUR_WAIT, STUCK_THINK, THINK_BLOCKED, THINK_GIVE_UP, THINK_WAIT, routeAround } from './skills/detour'
 
 type State =
@@ -17,8 +17,11 @@ type State =
    * something that must not be interrupted (passing the door, squeezing beside a bed)
    */
   | { k: 'moving'; path: Vec2[]; obj: WorldObject; aff: Affordance; next?: Step[]; exact?: boolean; onto?: boolean; busy?: boolean }
-  /** running the steps of a skill (skills/): `t` is real seconds into the current step, `from` where it began */
-  | { k: 'routine'; steps: Step[]; obj: WorldObject; aff: Affordance; t: number; from: Vec2; doorFrom: number; started: boolean }
+  /**
+   * running the steps of a skill (skills/): `t` is real seconds into the current step; `from`, `fromPose`,
+   * `doorFrom` and `chairFrom` are where the body was, its pose, the door and the seat's chair when it began
+   */
+  | { k: 'routine'; steps: Step[]; obj: WorldObject; aff: Affordance; t: number; from: Vec2; fromPose: Pose; doorFrom: number; chairFrom: number; started: boolean }
   | { k: 'doing'; obj: WorldObject; aff: Affordance; left: number; orbitAngle?: number }
   | { k: 'waiting'; left: number }
   /** acting out a gesture on the spot; `left` is in real seconds */
@@ -73,6 +76,11 @@ export class Agent {
   shoesOn = true
   /** where a hand must be right now (a door handle), or both hands on the feet; the avatar reaches there */
   reach: Vec3 | 'feet' | null = null
+  /**
+   * sitting down or standing up: how far up the body is, 0 (seated) .. 1 (standing), and the seat's use point (to
+   * find its height). The avatar keeps the feet where they are and swings the hips up over them. Null at other times.
+   */
+  rise: { u: number; seat: Vec2 } | null = null
   gestureStart = 0
   gestureUntil = 0
   /** facial emotion shown until `emotionUntil` (performance.now ms) */
@@ -375,7 +383,7 @@ export class Agent {
             this.startRoutine(getUp(this.world, s.obj), s.obj, s.aff)
           } else if (s.aff.pose === 'sit' && s.obj.approach) {
             // stand up off the seat, stepping forward to where one came from (R0)
-            this.startRoutine(standUp(this.world, s.obj, this.heading), s.obj, s.aff)
+            this.startRoutine(standUp(this.world, s.obj), s.obj, s.aff)
           } else {
             this.release()
             this.state = { k: 'idle' }
@@ -497,7 +505,10 @@ export class Agent {
   }
 
   private startRoutine(steps: Step[], obj: WorldObject, aff: Affordance) {
-    this.state = { k: 'routine', steps: [...steps], obj, aff, t: 0, from: { ...this.pos }, doorFrom: this.world.doorOpen, started: false }
+    this.state = {
+      k: 'routine', steps: [...steps], obj, aff, t: 0, from: { ...this.pos }, fromPose: this.pose,
+      doorFrom: this.world.doorOpen, chairFrom: chairOut(this.world, obj), started: false,
+    }
     this.runStep(0)
   }
 
@@ -517,6 +528,8 @@ export class Agent {
     s.steps.shift()
     s.t = 0
     s.from = { ...this.pos }
+    s.fromPose = this.pose
+    s.chairFrom = chairOut(this.world, s.obj)
     s.started = false
   }
 
@@ -580,7 +593,16 @@ export class Agent {
           }
           if (first) { this.pose = step.pose; this.heading = step.heading }
           const k = Math.min(1, s.t / step.secs), e = k * k * (3 - 2 * k)
-          this.pos = { x: s.from.x + (step.at.x - s.from.x) * e, z: s.from.z + (step.at.z - s.from.z) * e }
+          let f = e
+          const up = s.fromPose === 'sit' && step.pose === 'stand', down = s.fromPose === 'stand' && step.pose === 'sit'
+          if (up || down) {
+            // the thighs swing up from level (or down to it) about the knees, over feet that stay put: the hips
+            // move along by the thigh's reach, 1 - cos of its swing, while they rise by its sine (avatar.ts)
+            const u = up ? e : 1 - e
+            f = up ? 1 - Math.cos(u * Math.PI / 2) : Math.cos(u * Math.PI / 2)
+            this.rise = k < 1 ? { u, seat: { ...s.obj.usePos } } : null
+          }
+          this.pos = { x: s.from.x + (step.at.x - s.from.x) * f, z: s.from.z + (step.at.z - s.from.z) * f }
           if (k < 1) return
           break
         }
@@ -599,8 +621,9 @@ export class Agent {
           }
           const k = Math.min(1, s.t / step.secs), e = k * k * (3 - 2 * k)
           const was = { ...this.pos }
-          // the door moves with the hand, slowly (R3)
+          // the door moves with the hand, slowly (R3), and so does a chair at a table
           if (step.doorTo !== undefined) this.world.doorOpen = s.doorFrom + (step.doorTo - s.doorFrom) * e
+          if (step.chairTo !== undefined && s.obj.chair) this.world.chairOut.set(s.obj.chair.furniture, s.chairFrom + (step.chairTo - s.chairFrom) * e)
           if (step.slide) this.pos = { x: s.from.x + (step.slide.x - s.from.x) * e, z: s.from.z + (step.slide.z - s.from.z) * e }
           if (step.follow && step.doorTo !== undefined) {
             // walk with the door's edge, starting from where one stands: wait there until the door comes level
@@ -613,6 +636,7 @@ export class Agent {
           this.walkBack = mx * Math.sin(this.heading) + mz * Math.cos(this.heading) < 0
           // the hand stays on the handle as the door moves, or both hands go to the feet
           if (step.reach === 'feet') this.reach = 'feet'
+          else if (step.reach === 'chair') this.reach = s.obj.chair ? chairTop(this.world, s.obj.chair, this.pos) : null
           else if (step.reach) {
             const h = handle(this.world, this.world.doorOpen, step.reach)
             this.reach = h

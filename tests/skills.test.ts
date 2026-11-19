@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { Agent, PERSONAL_SPACE, WALK_SPEED } from '../src/agent'
 import { World, dist, segDist } from '../src/world'
 import { RULES } from '../src/skills'
-import { bedRect } from '../src/skills/bed'
+import { bedRect, bedside, overFeet } from '../src/skills/bed'
 import { leaf } from '../src/skills/door'
 import type { Affordance, Brain, Vec2, WorldObject } from '../src/types'
 
@@ -58,10 +58,12 @@ describe('R1, R2: going to bed and getting up', () => {
     expect(inside(r, sitAt)).toBe(true)
     expect(inside(r, sitAt, 0.25)).toBe(false)
     expect(dist(sitAt, bed.usePos)).toBeGreaterThan(0.4)
-    // standing or walking, it never stood inside the bed, and kept clear of furniture (R0)
+    // standing or walking, it never stood inside the bed, and kept clear of furniture (R0); only where it sits
+    // down from, over its feet, are the calves near the edge
+    const spot = overFeet(bedside(w, bed))
     for (const s of seen.filter(s => s.pose === 'stand')) {
       expect(inside(r, s.pos), `${s.pos.x},${s.pos.z}`).toBe(false)
-      expect(w.clearance(s.pos)).toBeGreaterThanOrEqual(0.19)
+      expect(w.clearance(s.pos)).toBeGreaterThanOrEqual(dist(s.pos, spot) < 0.15 ? 0.12 : 0.19)
     }
 
     // wake up
@@ -244,7 +246,7 @@ describe('R0, R2 in the tent: the camp cots', () => {
 })
 
 describe('R0 on seats', () => {
-  for (const id of ['sofa_seat_1', 'desk', 'dining_seat_1', 'armchair']) {
+  for (const id of ['sofa_seat_1', 'armchair']) {
     it(`${id}: sits down from in front of the seat and stands up off it, never standing inside it`, () => {
       const w = new World()
       w.minutes = 12 * 60
@@ -268,6 +270,70 @@ describe('R0 on seats', () => {
       for (const p of standingAt) {
         expect(dist(p, seat.usePos), `${p.x.toFixed(2)},${p.z.toFixed(2)}`).toBeGreaterThan(0.25)
         if (under) expect(inside(under, p)).toBe(false)
+      }
+    })
+  }
+
+  it('stands up with the hips swinging over the feet: rise goes from 0 to 1, and the body moves off the seat slowly at first', () => {
+    const w = new World()
+    w.minutes = 12 * 60
+    const a = new Agent(persona('Airi', 'bed'), { x: 0, z: 0.2 }, brain, w)
+    send(a, 'sofa_seat_1', 'relax')
+    run([a], () => a.state.k === 'doing')
+    expect(a.pose).toBe('sit')
+    const seat = { ...a.pos }
+    if (a.state.k === 'doing') a.state.left = 0.1
+    const rises: { u: number; moved: number }[] = []
+    run([a], () => a.state.k !== 'doing' && !a.rise && rises.length > 0, () => { if (a.rise) rises.push({ u: a.rise.u, moved: dist(a.pos, seat) }) })
+    expect(rises.length).toBeGreaterThan(10)
+    expect(rises[0].u).toBeLessThan(0.1)
+    expect(rises[rises.length - 1].u).toBeGreaterThan(0.9)
+    for (let i = 1; i < rises.length; i++) expect(rises[i].u).toBeGreaterThanOrEqual(rises[i - 1].u)
+    // the body moves as the thighs swing up over the feet (1 - cos), slowly while it leaves the seat: a third of the
+    // way when halfway up, not half of it as a slide would
+    const total = dist(a.pos, seat)
+    for (const r of rises) expect(r.moved / total).toBeCloseTo(1 - Math.cos(r.u * Math.PI / 2), 1)
+    expect(a.rise).toBeNull()
+  })
+
+  for (const id of ['desk', 'dining_seat_1', 'dining_seat_2']) {
+    it(`${id}: pulls the chair out, sits, slides in, and pushes it back in after, never standing in the chair or the table`, () => {
+      const w = new World()
+      w.minutes = 12 * 60
+      const a = new Agent(persona('Airi', 'bed'), { x: 0, z: 0.2 }, brain, w)
+      const seat = w.find(id)!
+      const chair = seat.chair!
+      expect(chair).toBeDefined()
+      // the chair is solid while it is pushed in
+      const home = w.obstacles.find(f => Math.abs(f.cx - chair.at.x) < 1e-3 && Math.abs(f.cz - chair.at.z) < 1e-3)!
+      expect(home).toBeDefined()
+      const table = w.obstacles.find(f => f !== home && inside(f, seat.pos))!
+      expect(table).toBeDefined()
+      let pulledOut = 0
+      const standing: { p: Vec2; out: number }[] = []
+      const record = () => {
+        const s = a.state, out = w.chairOut.get(chair.furniture) ?? 0
+        pulledOut = Math.max(pulledOut, out)
+        if (a.pose === 'stand' && !(s.k === 'routine' && s.steps[0]?.do === 'pose')) standing.push({ p: { ...a.pos }, out })
+      }
+      send(a, id, seat.affordances[0].verb)
+      run([a], () => a.state.k === 'doing', record)
+      expect(a.state.k).toBe('doing')
+      expect(a.pose).toBe('sit')
+      expect(pulledOut).toBeGreaterThan(0.3)
+      // sitting at the table with the chair pushed in under the body
+      expect(w.chairOut.get(chair.furniture) ?? 0).toBeCloseTo(0, 2)
+      expect(dist(a.pos, seat.usePos)).toBeLessThan(0.02)
+      if (a.state.k === 'doing') a.state.left = 0.1
+      run([a], () => a.state.k === 'waiting' || a.state.k === 'thinking', record)
+      expect(a.pose).toBe('stand')
+      // the chair is back where it was
+      expect(w.chairOut.get(chair.furniture) ?? 0).toBeCloseTo(0, 2)
+      // standing or walking, never in the chair where it is at that moment, nor in the table (a body's half depth)
+      for (const { p, out } of standing) {
+        const now = { ...home, cx: home.cx + chair.out.x * out, cz: home.cz + chair.out.z * out }
+        expect(inside(now, p, -0.1), `in the chair at ${p.x.toFixed(2)},${p.z.toFixed(2)} (out ${out.toFixed(2)})`).toBe(false)
+        expect(inside(table, p, -0.1), `in the table at ${p.x.toFixed(2)},${p.z.toFixed(2)}`).toBe(false)
       }
     })
   }

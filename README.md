@@ -25,7 +25,7 @@ Built with TypeScript, [three.js](https://threejs.org/) and [@pixiv/three-vrm](h
 - **Acting**: the LLM (or the mock brain) can make the body do something, such as wave, raise a hand or a leg, nod, bow, clap, point, stretch, cheer or jump, and set the face (happy, sad, angry, surprised, relaxed, shy). It works with any VRM.
 - **World physics** ([Rapier](https://rapier.rs/)): furniture, walls, fences and trees are solid. A gesture plays only if the body has room for it, otherwise the model is told what is in the way. Jumps follow gravity, people push the beach balls around, and hair and clothes rest against nearby backrests, tables and walls.
 - **In-world UI**: name tags, speech bubbles and thought bubbles above each agent.
-- **Camera**: orbit / pan / zoom and a follow mode.
+- **Camera**: orbit / pan / zoom and a follow mode. Moving the camera by hand ends the follow mode.
 - **Voice**: agents speak aloud with the browser's built-in text-to-speech (a different voice per agent, quieter when far from the camera). It starts after your first click or key press.
 
 ## Quick start
@@ -57,7 +57,7 @@ Without them, the game uses two public sample avatars from the official VRM samp
 | Drag | Rotate the camera |
 | Right-drag | Pan |
 | Scroll | Zoom |
-| `F` | Cycle follow-camera: Airi → Luna → free |
+| `F` | Cycle follow-camera: Airi → Luna → free. Moving the camera by hand ends it. |
 | `R` | Reset the view |
 | `1` / `2` / `3` | Game speed (normal / fast / fastest) |
 | `G` | Toggle the navigation debug overlay (blocked cells and routes) |

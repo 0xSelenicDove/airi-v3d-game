@@ -27,6 +27,20 @@ export interface Affordance {
 /** axis-aligned floor rectangle */
 export type Footprint = { cx: number; cz: number; w: number; d: number }
 
+/** a chair or stool at a table: it slides out to sit down and back in afterwards (skills/seat.ts) */
+export interface TableChair {
+  /** its furniture id (the key of World.chairOut) and its node in the room model */
+  furniture: string
+  node: string
+  /** its centre when pushed in, and the way it slides out (a unit vector away from the table) */
+  at: Vec2
+  out: Vec2
+  /** its size across the way it slides, and along it; the height of its top (a backrest or the seat) */
+  w: number
+  d: number
+  top: number
+}
+
 export interface WorldObject {
   id: string
   kind: string
@@ -34,10 +48,12 @@ export interface WorldObject {
   /** where an agent stands/sits when using it */
   usePos: Vec2
   affordances: Affordance[]
-  /** floor area that blocks walking (axis-aligned rectangle); omit for walk-through things like chairs */
+  /** floor area that blocks walking (axis-aligned rectangle); omit for things one can walk through */
   footprint?: Footprint
   /** where to walk to before stepping onto usePos (needed when usePos is inside the footprint) */
   approach?: Vec2
+  /** the chair to pull out, for a seat at a table */
+  chair?: TableChair
   /** in the yard rather than in the house */
   outdoors?: boolean
 }

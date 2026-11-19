@@ -260,6 +260,7 @@ export class Avatar {
     const stride = Math.max(moving && !glide ? agent.speedNow : 0, glide ? covered : 0)
     const verb = st.k === 'doing' ? st.aff.verb : ''
     const sit = agent.pose === 'sit', lie = agent.pose === 'lie', swim = agent.pose === 'swim'
+    const rise = agent.rise
     const speaking = !!agent.speech && now < agent.speechUntil
 
     // smooth heading (shortest way round)
@@ -290,6 +291,9 @@ export class Avatar {
     const p = this.walkP, s = Math.sin(p), c = Math.cos(p)
     const breath = Math.sin(t * 1.7)
     const P = (n: BoneName, x = 0, y = 0, z = 0, rate = k) => this.pose(n, rate, x, y, z)
+    // bones only the motion clips move: back to rest when no clip plays, or they keep the clip's last pose
+    // (lying down, shoulders still raised and rolled back put the arms under the body)
+    for (const n of CLIP_ONLY) P(n)
 
     // ---- legs ----
     const sw = t * 3.4 // swimming stroke phase
@@ -297,6 +301,13 @@ export class Avatar {
       P('leftUpperLeg', Math.sin(sw * 2.4) * 0.35, 0, -0.03); P('rightUpperLeg', -Math.sin(sw * 2.4) * 0.35, 0, 0.03)
       P('leftLowerLeg', Math.max(0, -Math.sin(sw * 2.4)) * 0.5); P('rightLowerLeg', Math.max(0, Math.sin(sw * 2.4)) * 0.5)
       P('leftFoot', 0.3); P('rightFoot', 0.3)
+    } else if (rise) {
+      // sitting down or standing up: the thighs swing between level and upright about knees over the feet, the
+      // shins stay upright, so the feet stay where they are (the agent moves the body to match, agent.ts)
+      const down = 1 - rise.u, phi = down * Math.PI / 2
+      P('leftUpperLeg', -phi, 0.1 * down, -0.05 * down, 1); P('rightUpperLeg', -phi, -0.1 * down, 0.05 * down, 1)
+      P('leftLowerLeg', phi - 0.1 * down, 0, 0, 1); P('rightLowerLeg', phi - 0.1 * down, 0, 0, 1)
+      P('leftFoot', (0.1 + this.footPoint) * down, 0, 0, 1); P('rightFoot', (0.1 + this.footPoint) * down, 0, 0, 1)
     } else if (sit) {
       P('leftUpperLeg', -Math.PI / 2, 0.1, -0.05); P('rightUpperLeg', -Math.PI / 2, -0.1, 0.05)
       P('leftLowerLeg', Math.PI / 2 - 0.1); P('rightLowerLeg', Math.PI / 2 - 0.1)
@@ -393,7 +404,9 @@ export class Avatar {
     }
     // ---- motion clips (clips.ts): walking, and standing about while not talking, from captured motion; the
     // pose above blends into the clip, and everything below goes on top of it ----
-    const idleStand = !moving && !sit && !lie && !swim && verb !== 'use_computer' && verb !== 'read' && !speaking
+    // getting up or sitting down leans the body forward over the feet, most as the hips leave the seat
+    if (rise) P('spine', 0.45 * Math.sin(rise.u * Math.PI), 0, 0, 1)
+    const idleStand = !moving && !posing && !sit && !lie && !swim && verb !== 'use_computer' && verb !== 'read' && !speaking
     const clipKind = moving && agent.pose === 'stand' ? 'walk' : idleStand ? 'idle' : null
     const clipRate = clipKind === 'walk'
       ? stride / (this.clips?.clipSpeed() || WALK_SPEED) * (1 + 0.05 * dr.pace.at(t)) * (agent.walkBack ? -1 : 1)
@@ -435,7 +448,8 @@ export class Avatar {
       if (other) {
         let a = Math.atan2(other.pos.x - agent.pos.x, other.pos.z - agent.pos.z) - this.yaw
         a = Math.atan2(Math.sin(a), Math.cos(a))
-        want = Math.max(-1.0, Math.min(1.0, a))
+        // someone behind: look ahead, or the head flips from one shoulder to the other as they cross behind
+        want = Math.abs(a) > LOOK_BEHIND ? 0 : Math.max(-1.0, Math.min(1.0, a))
       }
     }
     this.lookYaw += (want - this.lookYaw) * kSlow
@@ -454,8 +468,14 @@ export class Avatar {
     const tgtZ = lie ? this.hipsY * 0.95 : swim ? -this.hipsY * 0.95 : sit ? -0.12 : 0
     const kp = 1 - Math.exp(-dt * 7)
     this.cur.pitch += (tgtPitch - this.cur.pitch) * kp
-    this.cur.y += (tgtY - this.cur.y) * kp
-    this.cur.z += (tgtZ - this.cur.z) * kp
+    if (rise) {
+      // the hips rise with the thighs' swing (the sine of it), straight from the seat's height, not eased behind
+      this.cur.y = (this.sitHeight(agent, physics) - this.hipsY) * (1 - Math.sin(rise.u * Math.PI / 2))
+      this.cur.z = -0.12 * (1 - rise.u)
+    } else {
+      this.cur.y += (tgtY - this.cur.y) * kp
+      this.cur.z += (tgtZ - this.cur.z) * kp
+    }
     this.inner.rotation.x = this.cur.pitch
     // bent knees lower the hips by the height the legs lose, so the feet stay on the ground (see bodyGesture)
     this.crouchDrop += (this.legDrop(crouch) - this.crouchDrop) * (1 - Math.exp(-dt * 20))
@@ -561,6 +581,20 @@ export class Avatar {
       case 'pull_door':                     // hand on the handle, the elbow bending as the door comes
         P('spine', -0.04, 0, 0, w)
         arm(1, [0.1, 1.35, 0.45], [0, 0.2 + 0.9 * u, 0]); return 0
+      case 'move_chair': {                  // a hand on the chair's top, bending down to a low one (a stool)
+        if (sit) { P('spine', 0.08, 0, 0, w); return 0 } // seated: sliding in or out with the chair
+        // bend down only while the hand is on the chair (reachAt is kept after the reach, for its fade-out)
+        const on = this.reachAt instanceof THREE.Vector3 ? this.reachW : 0
+        const low = this.reachAt instanceof THREE.Vector3 ? Math.min(1, Math.max(0, (1.0 - this.reachAt.y) / 0.5)) * on : 0
+        const crouch = 0.5 * low
+        // only a crouch moves the legs: fading out into standing up, straight legs would pull the feet in
+        if (crouch > 0.01) for (const n of ['left', 'right'] as const) {
+          P(`${n}UpperLeg` as BoneName, -0.6 * crouch, 0, 0, w); P(`${n}LowerLeg` as BoneName, 1.2 * crouch, 0, 0, w)
+          P(`${n}Foot` as BoneName, -0.6 * crouch, 0, 0, w)
+        }
+        P('spine', 0.1 + 0.35 * low, 0, 0, w); P('chest', 0.12 * low, 0, 0, w)
+        return crouch
+      }
       case 'shoes': {                       // seated: lift one foot, then the other, and bend down to it
         const first = u < 0.5, f = first ? u * 2 : (u - 0.5) * 2
         const lift = Math.min(1, f / 0.25, (1 - f) / 0.25)
@@ -605,7 +639,7 @@ export class Avatar {
       case 'shrug': P('head', 0, 0, 0.12, w); break
       case 'cheer': P('head', -0.15, 0, 0, w); break
       case 'shoes': P('head', 0.35, 0, 0, w); break
-      case 'reach_handle': case 'pull_door': case 'push_door': P('head', 0.12, 0, 0, w); break
+      case 'reach_handle': case 'pull_door': case 'push_door': case 'move_chair': P('head', 0.12, 0, 0, w); break
     }
   }
 
@@ -698,7 +732,9 @@ export class Avatar {
 
   /** the hips' height for sitting on whatever is under the avatar: the seat's top plus this model's thigh */
   private sitHeight(agent: Agent, physics?: Physics) {
-    const hit = physics?.hit({ x: agent.pos.x, y: 1.3, z: agent.pos.z }, { x: 0, y: -1, z: 0 }, 1.3, agent.name)
+    // sitting down or getting up, the body is beside the seat: look for the seat under its use point
+    const at = agent.rise?.seat ?? agent.pos
+    const hit = physics?.hit({ x: at.x, y: 1.3, z: at.z }, { x: 0, y: -1, z: 0 }, 1.3, agent.name)
     if (hit && hit.point.y > 0.2) this.seatTop = hit.point.y
     return Math.max(0.5, this.seatTop + this.thighR + 0.01 + this.legBelowHips)
   }
@@ -896,6 +932,10 @@ const SIT_ARM = { upX: -0.3, upZ: 1.3, lowY: 0.9, handX: 0.15 }
 const SIT_TALK = { upX: -0.6, upZ: -0.2, lowY: 1.8 }
 
 type BoneName = Parameters<VRM['humanoid']['getNormalizedBoneNode']>[0]
+/** bones that the motion clips turn and the procedural pose does not set */
+const CLIP_ONLY: BoneName[] = ['upperChest', 'leftShoulder', 'rightShoulder', 'leftToes', 'rightToes']
+/** someone further round than this from straight ahead (radians, about 110°) is behind: the head does not turn */
+const LOOK_BEHIND = 1.9
 
 /**
  * How thick the thighs are: the distance from the thigh's bone line to its skin, for the vertices that mostly

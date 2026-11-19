@@ -10,6 +10,7 @@ import type { Affordance, Footprint, Vec2, WorldObject } from '../types'
 import type { World } from '../world'
 import { dist } from '../world'
 import type { Step } from './index'
+import { RISE_REACH } from './seat'
 
 /** head towards -x on every bed and cot (see agent.ts for lying down) */
 export const LIE_HEADING = Math.PI / 2
@@ -128,8 +129,9 @@ export function lieDown(world: World, obj: WorldObject, _aff: Affordance): Step[
   return [
     { do: 'walk', to: first },
     ...rest.map((to): Step => ({ do: 'squeeze', to })),
+    { do: 'squeeze', to: overFeet(b) },
     { do: 'face', heading: b.out, secs: 0.4 },
-    { do: 'pose', pose: 'sit', at: b.sit, heading: b.out, secs: 0.8 },
+    { do: 'pose', pose: 'sit', at: b.sit, heading: b.out, secs: 0.9 },
     { do: 'act', motion: 'shoes', secs: 3.2, shoes: 'off', reach: 'feet' },
     { do: 'pose', pose: 'lie', at: obj.usePos, heading: LIE_HEADING, secs: 1.2 },
     { do: 'use' },
@@ -143,7 +145,18 @@ export function getUp(world: World, obj: WorldObject): Step[] {
   return [
     { do: 'pose', pose: 'sit', at: b.sit, heading: b.out, secs: 1.0 },
     { do: 'act', motion: 'shoes', secs: 3.2, shoes: 'on', reach: 'feet' },
-    { do: 'pose', pose: 'stand', at: b.stand, heading: b.out, secs: 0.8 },
+    { do: 'pose', pose: 'stand', at: overFeet(b), heading: b.out, secs: 0.9 },
+    { do: 'squeeze', to: b.stand },
     ...back.map((to): Step => ({ do: 'squeeze', to })),
   ]
+}
+
+/**
+ * Standing just off the edge, over where the feet are while sitting on it: one sits down and stands up from here,
+ * so the feet stay put (Agent.rise), and steps the rest of the way out to `stand`.
+ */
+export function overFeet(b: Bedside): Vec2 {
+  const d = dist(b.sit, b.stand) || 1
+  const k = Math.min(1, RISE_REACH / d)
+  return { x: b.sit.x + (b.stand.x - b.sit.x) * k, z: b.sit.z + (b.stand.z - b.sit.z) * k }
 }

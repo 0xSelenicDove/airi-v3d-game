@@ -7,7 +7,7 @@ import type { Vec2 } from '../types'
 export type Pose = 'stand' | 'sit' | 'lie' | 'swim'
 
 /** body movements that skills play (they are not offered to the LLM as gestures) */
-export const SKILL_MOTIONS = ['reach_handle', 'push_door', 'pull_door', 'shoes'] as const
+export const SKILL_MOTIONS = ['reach_handle', 'push_door', 'pull_door', 'shoes', 'move_chair'] as const
 export type SkillMotion = (typeof SKILL_MOTIONS)[number]
 
 /** one step of a skill; the agent runs the steps in order (agent.ts, runStep) */
@@ -20,14 +20,18 @@ export type Step =
   | { do: 'onto'; to: Vec2 }
   /** turn to a heading (radians, 0 = +z), or to the door handle on one face of the leaf */
   | { do: 'face'; heading: number; secs: number; toHandle?: 'in' | 'out' }
-  /** change pose while moving the body to `at` over `secs` (sitting down on a bed edge, lying down, getting up) */
+  /**
+   * change pose while moving the body to `at` over `secs` (sitting down on a bed edge, lying down, getting up).
+   * Between sitting and standing, the feet stay where they are and the hips swing over them (Agent.rise)
+   */
   | { do: 'pose'; pose: Pose; at: Vec2; heading: number; secs: number }
   /**
    * play a body movement over `secs`. It can move the door to `doorTo` (0 shut .. 1 open), keep a hand on the
-   * handle (`reach` 'in' or 'out', the face of the leaf) or both hands on the feet ('feet'), slide the body to
-   * `slide`, walk with the door's edge (`follow`), and take the shoes off or put them on as it ends
+   * handle (`reach` 'in' or 'out', the face of the leaf), both hands on the feet ('feet') or a hand on the
+   * chair's top ('chair'), slide the body to `slide`, slide the seat's chair out to `chairTo` metres, walk with
+   * the door's edge (`follow`), and take the shoes off or put them on as it ends
    */
-  | { do: 'act'; motion: SkillMotion; secs: number; doorTo?: number; reach?: 'in' | 'out' | 'feet'; slide?: Vec2; follow?: boolean; shoes?: 'off' | 'on' }
+  | { do: 'act'; motion: SkillMotion; secs: number; doorTo?: number; reach?: 'in' | 'out' | 'feet' | 'chair'; slide?: Vec2; chairTo?: number; follow?: boolean; shoes?: 'off' | 'on' }
   /** stop and think, with the thought shown above the head */
   | { do: 'think'; text: string; secs: number }
   /** take the door (wait if someone else has it) or let it go */
