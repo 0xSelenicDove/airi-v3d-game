@@ -27,21 +27,42 @@ export function texturesOf(root: THREE.Object3D): THREE.Texture[] {
   return [...found]
 }
 
-/** scale every texture under `root` larger than `max` down to fit, keeping its aspect (in the browser's decoder) */
+/** the worker that scales textures (shrink-worker.ts), started on first use */
+let worker: Worker | null = null
+let nextJob = 1
+const jobs = new Map<number, (image: ImageBitmap) => void>()
+
+/** scale a decoded texture image in the worker; the original is handed over, and comes back if scaling fails */
+function shrinkInWorker(image: ImageBitmap, width: number, height: number): Promise<ImageBitmap> {
+  if (!worker) {
+    worker = new Worker(new URL('./shrink-worker.ts', import.meta.url), { type: 'module' })
+    worker.onmessage = (e: MessageEvent<{ id: number; image: ImageBitmap }>) => {
+      jobs.get(e.data.id)?.(e.data.image)
+      jobs.delete(e.data.id)
+    }
+  }
+  const id = nextJob++
+  return new Promise(resolve => {
+    jobs.set(id, resolve)
+    worker!.postMessage({ id, image, width, height }, [image])
+  })
+}
+
+/** scale every texture under `root` larger than `max` down to fit, keeping its aspect, off the main thread */
 export async function shrinkTextures(root: THREE.Object3D, max = MAX_TEXTURE) {
   if (typeof createImageBitmap !== 'function') return
   await Promise.all(texturesOf(root).map(async t => {
     const img = t.image as (ImageBitmap | HTMLImageElement | HTMLCanvasElement) & { width: number; height: number } | null
     if (!img || !img.width || !img.height || Math.max(img.width, img.height) <= max) return
     const k = max / Math.max(img.width, img.height)
+    const width = Math.max(1, Math.round(img.width * k)), height = Math.max(1, Math.round(img.height * k))
     try {
-      const small = await createImageBitmap(img, {
-        resizeWidth: Math.max(1, Math.round(img.width * k)),
-        resizeHeight: Math.max(1, Math.round(img.height * k)),
-        resizeQuality: 'high',
-      })
-      if ('close' in img && typeof img.close === 'function') img.close()
-      t.image = small
+      if (typeof Worker === 'function' && typeof ImageBitmap === 'function' && img instanceof ImageBitmap) {
+        t.image = await shrinkInWorker(img, width, height)
+      } else {
+        // not a decoded bitmap (an <img> or a canvas): scale it here
+        t.image = await createImageBitmap(img, { resizeWidth: width, resizeHeight: height, resizeQuality: 'high' })
+      }
       t.needsUpdate = true
     } catch {
       // a texture the browser cannot redraw keeps its size: it still works, only heavier
