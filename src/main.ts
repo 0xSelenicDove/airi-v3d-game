@@ -15,6 +15,7 @@ import { Speaker, type VoiceStyle } from './tts'
 import type { Persona, TableChair } from './types'
 import { AIRI_NAME, AUTOPILOT_SECS, AiriBrain, AiriLink, DEFAULT_BRIDGE } from './airi'
 import { prepareForScene } from './prepare'
+import { AdaptiveResolution } from './resolution'
 
 const world = new World()
 // Configure via .env (see .env.example). Without VITE_LLM_URL the mock brain is used.
@@ -73,9 +74,11 @@ setInterval(save, 3000)
 addEventListener('beforeunload', save)
 
 // ---- three.js scene ----
-const renderer = new THREE.WebGLRenderer({ antialias: true })
-// at most 1.5 device pixels per CSS pixel: on a high-DPI screen the full ratio draws 2 to 4 times the pixels for little gain
-renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5))
+// ask for the fast GPU where the browser lets a page choose (on Windows, the graphics settings choose it)
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' })
+// at most 1.5 device pixels per CSS pixel: on a high-DPI screen the full ratio draws 2 to 4 times the pixels for little
+// gain; lower still while frames are slow (resolution.ts)
+const resolution = new AdaptiveResolution(renderer, Math.min(devicePixelRatio, 1.5))
 renderer.setSize(innerWidth, innerHeight)
 renderer.shadowMap.enabled = true
 document.body.appendChild(renderer.domElement)
@@ -373,6 +376,7 @@ const nightColor = new THREE.Color(0x0a0f24)
 let last = performance.now()
 function frame(now: number) {
   requestAnimationFrame(frame)
+  resolution.update(now - last)
   const dt = Math.min(0.1, (now - last) / 1000)
   last = now
   const gameDt = world.advance(dt)

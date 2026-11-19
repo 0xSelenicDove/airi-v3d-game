@@ -52,6 +52,8 @@ Without them, the game uses two public sample avatars from the official VRM samp
 
 Textures larger than 1024 px are scaled down to 1024 px when a model loads (`MAX_TEXTURE` in [`src/prepare.ts`](src/prepare.ts)). VRoid exports often have 4096 px textures, about 1.5 GB of GPU memory per character, and at this camera distance they look the same. Shaders compile and textures upload before the model appears, so the game does not freeze when it arrives.
 
+On a slow GPU the game lowers its drawing resolution until it runs smoothly, and raises it again when there is room ([`src/resolution.ts`](src/resolution.ts)). On a laptop with two GPUs, Windows often runs the browser on the integrated one: in Windows Settings > System > Display > Graphics, set your browser to *High performance* for the full frame rate.
+
 ## Controls
 
 | Input | Action |
