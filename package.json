@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "test": "vitest run"
+    "test": "vitest run",
+    "airi-bridge": "node bridge/airi-mcp.mjs --http 8790"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.21.0",
@@ -14,9 +15,12 @@
     "three": "^0.187.0"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@types/three": "^0.187.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.8",
-    "vitest": "^5.1.0"
+    "vitest": "^5.1.0",
+    "ws": "^8.23.0",
+    "zod": "^4.6.7"
   }
 }

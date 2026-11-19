@@ -13,6 +13,7 @@ import { MotionLibrary } from './clips'
 import { MemoryStream } from './memory'
 import { Speaker, type VoiceStyle } from './tts'
 import type { Persona, TableChair } from './types'
+import { AIRI_NAME, AiriBrain, AiriLink, DEFAULT_BRIDGE } from './airi'
 
 const world = new World()
 // Configure via .env (see .env.example). Without VITE_LLM_URL the mock brain is used.
@@ -26,7 +27,13 @@ const personas: Persona[] = [
   { name: 'Luna', description: 'A cheerful, sociable early riser. Likes chatting, and also reading.', color: 0x8fd8ff, sleepWindow: [22, 6], bed: 'bed2' },
 ]
 const startPos = [{ x: 0, z: 0 }, { x: -1.5, z: 1.5 }]
-const agents = personas.map((p, i) => new Agent(p, startPos[i], brain, world))
+// AIRI in the world (airi.ts): with ?airi in the URL the page connects to the bridge (bridge/airi-mcp.mjs), and while
+// AIRI is connected through it, she plays Airi and decides for her. ?airi=ws://host:port picks another bridge address.
+const airiUrl = new URLSearchParams(location.search).get('airi')
+const airiBrain = airiUrl !== null ? new AiriBrain(brain) : null
+const agents = personas.map((p, i) => new Agent(p, startPos[i], airiBrain && p.name === AIRI_NAME ? airiBrain : brain, world))
+const airiAgent = agents.find(a => a.name === AIRI_NAME)
+const airiLink = airiBrain && airiAgent ? new AiriLink(airiUrl || DEFAULT_BRIDGE, airiBrain, airiAgent, world, agents) : null
 // chance meetings: greetings and small talk when two of them run into each other
 const social = new Social(world, agents)
 
@@ -301,7 +308,7 @@ addEventListener('drop', e => {
   if (f && f.name.toLowerCase().endsWith('.vrm')) avatars[i].loadFile(f).catch(err => console.warn(err))
 })
 
-;(window as any).dbg = { world, agents, avatars, camera, controls, brain, social, get physics() { return physics }, balls } // handy for console poking
+;(window as any).dbg = { world, agents, avatars, camera, controls, brain, social, airi: airiLink, get physics() { return physics }, balls } // handy for console poking
 
 // ---- navigation debug overlay (press G) ----
 const debug = new THREE.Group()
@@ -407,6 +414,7 @@ function frame(now: number) {
   }
 
   agents.forEach((a, i) => avatars[i].update(dt, a, physics))
+  airiLink?.update()
   if (debug.visible) {
     agents.forEach((a, i) => {
       const pts = a.state.k === 'moving' ? [a.pos, ...a.state.path] : []
@@ -420,7 +428,7 @@ function frame(now: number) {
 
   hud.textContent =
     `${world.clock}   speed x${world.speed} (1/2/3 speed, G nav, F follow, R reset, M voice ${speaker.enabled ? 'on' : 'off'})   brain: ${brain instanceof LLMBrain ? 'LLM' : 'mock'}${follow >= 0 ? `   following ${agents[follow].name}` : ''}\n` +
-    (brain instanceof LLMBrain && brain.status ? `⚠ ${brain.status}\n` : '') + '\n' +
+    (brain instanceof LLMBrain && brain.status ? `⚠ ${brain.status}\n` : '') + (airiLink ? `${airiLink.statusText}\n` : '') + '\n' +
     agents.map(a => a.statusText + (a.memory.length ? '\n  ' + a.memory.slice(-3).join('\n  ') : '')).join('\n\n')
 
   if (follow >= 0) {

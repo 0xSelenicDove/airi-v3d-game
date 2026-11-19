@@ -94,6 +94,40 @@ Notes:
 - Everything is called directly from the browser. If your server blocks cross-origin requests, allow `http://localhost:5173` (for Ollama, set `OLLAMA_ORIGINS`).
 - Anything in a `VITE_` variable is visible in the browser, so do not put a production API key there.
 
+## AIRI in the world (MCP)
+
+[AIRI](https://github.com/moeru-ai/airi), or any other MCP client, can live in the world as **Airi** and decide for herself. Luna stays an NPC with her own brain.
+
+```
+AIRI ⇄ MCP (stdio or HTTP) ⇄ bridge/airi-mcp.mjs ⇄ WebSocket (127.0.0.1:8789) ⇄ the game page (?airi)
+```
+
+1. Run `npm install` in this repository.
+2. Add the bridge to AIRI's MCP servers (its `mcp.json`). Choose one:
+   - stdio: AIRI starts the bridge itself.
+     ```json
+     { "mcpServers": { "airi-v3d-game": { "command": "node", "args": ["<path to airi-v3d-game>/bridge/airi-mcp.mjs"] } } }
+     ```
+   - HTTP: start the bridge yourself with `npm run airi-bridge`, then connect AIRI to the URL.
+     ```json
+     { "mcpServers": { "airi-v3d-game": { "url": "http://127.0.0.1:8790/mcp" } } }
+     ```
+3. Open the game with `?airi` in the address, for example `http://localhost:5173/?airi`, or the live demo with `?airi`. The HUD shows `AIRI: connected, playing Airi`.
+
+AIRI gets these tools:
+
+| Tool | What it does |
+| --- | --- |
+| `world_status` | The time, what Airi and the others are doing and where, and the gestures and emotions `act` accepts |
+| `look` | What Airi sees: her needs, the things she can use (ids and verbs), people nearby, what she heard, her memories, the result of her last action |
+| `act` | Use an object, say something, act out a gesture, or wait. `interrupt: true` ends the current activity first |
+| `wait_for_event` | What happened since the last call: what Airi did and noticed, what she heard, and `turn` when she waits for a decision |
+
+- While AIRI is connected, nobody else decides for Airi: she waits for AIRI's next action. When AIRI disconnects, Airi goes back to her own brain.
+- The bridge listens only on 127.0.0.1. It accepts game pages from this computer and from the live demo only. Add another origin with `--origin`.
+- Change the ports with `--ws <port>` (default 8789) and `--http <port>` (default for `npm run airi-bridge`: 8790). With another WebSocket port, open the game with `?airi=ws://127.0.0.1:<port>`.
+- Keep the game tab visible. Browsers pause background tabs, and then the game cannot answer.
+
 ## How it works
 
 ```
@@ -113,6 +147,7 @@ Each agent runs two loops. A **slow loop** asks the brain for the next action on
 | [`src/acting.ts`](src/acting.ts) | Gestures and emotions the agents can act out, and the words and tags the LLM may use for them |
 | [`src/physics.ts`](src/physics.ts) | Rapier world: solid scenery, the agents' bodies, beach balls, and the space checks for gestures |
 | [`src/brain.ts`](src/brain.ts) | `MockBrain`, `LLMBrain`, JSON action parsing |
+| [`src/airi.ts`](src/airi.ts) | AIRI in the world: the brain AIRI drives, and the page's link to the MCP bridge ([`bridge/airi-mcp.mjs`](bridge/airi-mcp.mjs)) |
 | [`src/memory.ts`](src/memory.ts) | Memory stream, scored retrieval, pruning, (de)serialization |
 | [`src/avatar.ts`](src/avatar.ts) | VRM loading, procedural animation, name tags and bubbles |
 | [`src/main.ts`](src/main.ts) | Scene, room model, camera, persistence, debug overlay |
