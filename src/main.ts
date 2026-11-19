@@ -13,7 +13,7 @@ import { MotionLibrary } from './clips'
 import { MemoryStream } from './memory'
 import { Speaker, type VoiceStyle } from './tts'
 import type { Persona, TableChair } from './types'
-import { AIRI_NAME, AiriBrain, AiriLink, DEFAULT_BRIDGE } from './airi'
+import { AIRI_NAME, AUTOPILOT_SECS, AiriBrain, AiriLink, DEFAULT_BRIDGE } from './airi'
 
 const world = new World()
 // Configure via .env (see .env.example). Without VITE_LLM_URL the mock brain is used.
@@ -29,8 +29,11 @@ const personas: Persona[] = [
 const startPos = [{ x: 0, z: 0 }, { x: -1.5, z: 1.5 }]
 // AIRI in the world (airi.ts): with ?airi in the URL the page connects to the bridge (bridge/airi-mcp.mjs), and while
 // AIRI is connected through it, she plays Airi and decides for her. ?airi=ws://host:port picks another bridge address.
-const airiUrl = new URLSearchParams(location.search).get('airi')
-const airiBrain = airiUrl !== null ? new AiriBrain(brain) : null
+// When AIRI gives no action for a while, Airi's own brain decides that once: ?autopilot=<seconds> (0: never).
+const query = new URLSearchParams(location.search)
+const airiUrl = query.get('airi')
+const autopilot = Number(query.get('autopilot') ?? AUTOPILOT_SECS)
+const airiBrain = airiUrl !== null ? new AiriBrain(brain, Number.isFinite(autopilot) && autopilot >= 0 ? autopilot * 1000 : AUTOPILOT_SECS * 1000) : null
 const agents = personas.map((p, i) => new Agent(p, startPos[i], airiBrain && p.name === AIRI_NAME ? airiBrain : brain, world))
 const airiAgent = agents.find(a => a.name === AIRI_NAME)
 const airiLink = airiBrain && airiAgent ? new AiriLink(airiUrl || DEFAULT_BRIDGE, airiBrain, airiAgent, world, agents) : null

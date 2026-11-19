@@ -169,8 +169,10 @@ export function createMcpServer(link) {
   const server = new McpServer({ name: 'airi-v3d-game', version: '1.0.0' }, {
     instructions: 'You live in a small 3D world as the character Airi: a house with a fenced yard, and a meadow with a pond, '
       + 'a lake, a campfire and a tent. Luna lives there too. Your body has needs (energy, fun, knowledge) that change over '
-      + 'time. While you are connected, nobody decides for you: use look to see your situation, act to do something, and '
-      + 'wait_for_event to hear what happens next (an activity ends, someone speaks to you, or it is your turn to decide).',
+      + 'time. While you are connected, you decide for yourself: use look to see your situation, act to do something, and '
+      + 'wait_for_event to hear what happens next (an activity ends, someone speaks to you, or it is your turn to decide). '
+      + 'If you give no action for a while (60 s by default) when it is your turn, your own habits choose that one thing for '
+      + 'you, and you get an "autopilot" event; act with interrupt: true to change it.',
   })
 
   server.registerTool('world_status', {
@@ -213,8 +215,9 @@ export function createMcpServer(link) {
 
   server.registerTool('wait_for_event', {
     title: 'Wait for something to happen',
-    description: 'What has happened to you since you last asked: things you did and noticed, words you heard, and "turn" '
-      + 'events when you are waiting for your next decision. If nothing has happened yet, waits up to timeout_seconds.',
+    description: 'What has happened to you since you last asked: things you did and noticed, words you heard, "turn" '
+      + 'events when you are waiting for your next decision, and "autopilot" events when your habits decided because you '
+      + 'gave no action in time. If nothing has happened yet, waits up to timeout_seconds.',
     inputSchema: { timeout_seconds: z.number().min(1).max(120).optional().describe('how long to wait, default 30') },
     annotations: { readOnlyHint: true },
   }, async ({ timeout_seconds }) => {
