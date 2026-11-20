@@ -6,7 +6,7 @@
 
 使用 **Unity 6**（URP）、[UniVRM](https://github.com/vrm-c/UniVRM)、Unity 的 NavMesh 和物理引擎构建。
 
-> **当前状态：正在迁移到 Unity，第一阶段（垂直切片）。** 游戏从 three.js 改为 Unity，因为网页版已经碰到了瓶颈：物品无法拆开、程序化动作僵硬、开门关门没有重量感。这个分支有一栋房子，其中的门、床、书桌和冰箱都能真正使用，有两个角色和规则型的模拟大脑。网页版的 LLM 大脑、记忆、闲聊、语音和 AIRI 桥接**还没有移植**，它们都保留在 git 历史里（网页版最后一次提交是 `157b50f`）。
+> **当前状态：正在迁移到 Unity，第一阶段（垂直切片）。** 游戏从 three.js 改为 Unity，因为网页版已经碰到了瓶颈：物品无法拆开、程序化动作僵硬、开门关门没有重量感。这个分支有一栋房子，其中的门、床、书桌和冰箱都能真正使用，有两个角色和规则型的模拟大脑。AIRI 可以通过 MCP 桥接作为 Airi 生活在里面（见下文）。网页版的 LLM 大脑、记忆、闲聊和语音**还没有移植**，它们都保留在 git 历史里（网页版最后一次提交是 `157b50f`）。
 
 ![夜晚的房子：Luna 盖着被子睡着了，Airi 正进门并关上大门](docs/images/overview.jpg)
 
@@ -60,6 +60,35 @@
 
 挡在镜头和房间之间的墙会自动隐藏（影子仍然保留）。
 
+## 让 AIRI 进入这个世界（MCP）
+
+[AIRI](https://github.com/moeru-ai/airi) 或任何其他 MCP 客户端，都可以作为 **Airi** 生活在这个世界里，由自己做决定。Luna 仍然是 NPC，用她自己的大脑。
+
+```
+AIRI ⇄ MCP（stdio 或 HTTP）⇄ bridge/airi-mcp.mjs ⇄ WebSocket（127.0.0.1:8789）⇄ 游戏（AiriLink）
+```
+
+1. 在本仓库运行 `npm install`（桥接需要）。
+2. 在 AIRI 的 MCP 服务器设置（它的 `mcp.json`）里添加桥接，二选一：
+   - stdio：由 AIRI 自己启动桥接。
+     ```json
+     { "mcpServers": { "airi-v3d-game": { "command": "node", "args": ["<airi-v3d-game 的路径>/bridge/airi-mcp.mjs"] } } }
+     ```
+   - HTTP：先用 `npm run airi-bridge` 启动桥接，再使用 `{ "url": "http://127.0.0.1:8790/mcp" }`。
+3. 在 `Assets/Scenes/Room.unity` 里按 Play。游戏会自己连接桥接；桥接没运行时，每 3 秒重试一次。HUD 会显示 `AIRI: connected, playing Airi`。
+
+| 工具 | 作用 |
+| --- | --- |
+| `world_status` | 当前时间，Airi 和 Luna 在做什么、在哪里 |
+| `look` | Airi 的需求和正在做的事、可以使用的东西（id、当前可用的动词、谁在使用），以及 Luna |
+| `act` | 使用物品（`interact`）、说话（`say`，文字显示在 Airi 头上）或等待（`wait`）。`interrupt: true` 会先结束当前的活动 |
+| `wait_for_event` | Airi 开始做的事和想法；轮到她做决定时有 `turn` 事件，自己的大脑代为决定时有 `autopilot` 事件 |
+
+- AIRI 连接期间，Airi 会等待 AIRI 的下一个行动。如果 60 秒内没有给出行动，就由 Airi 自己的大脑决定这一件事（自动驾驶），AIRI 会收到 `autopilot` 事件。AIRI 断开后，Airi 会回到自己的大脑。
+- `AiriLink` 会在场景开始时自动加入（[`Assets/Scripts/Airi`](Assets/Scripts/Airi)）。可以在组件上设置地址和自动驾驶时间；打包的版本也可以用 `-airi-bridge ws://127.0.0.1:<端口>` 和 `-airi-autopilot <秒>` 启动。
+- 桥接只监听 127.0.0.1。它接受游戏（游戏不发送 `Origin` 头），网页只接受来自本机的。
+- Unity 版还没有动作、表情和语音，所以 `act` 没有 `gesture` 类型。
+
 ## 项目结构
 
 | 路径 | 内容 |
@@ -69,7 +98,8 @@
 | `Assets/Scripts/Editor` | `SliceSceneBuilder`（生成场景）、`ClipFactory`（生成人形动画片段和 Animator Controller）、`BatchTools`（命令行入口） |
 | `Assets/Art/Props` | 物品模型，由 `tools/blender/build_props.py` 导出 |
 | `Assets/Animations` | `Character.controller`；`Generated/` 里是生成的动画片段；动作捕捉放进 `Mocap/` |
-| `bridge/` | 网页版的 AIRI MCP 桥接（Node）。它仍然使用网页版的协议，Unity 端还没写。 |
+| `Assets/Scripts/Airi` | `AiriLink`（游戏这一端的 AIRI 连接）和 `AiriBrain`（AIRI 连接时 Airi 的大脑） |
+| `bridge/` | AIRI MCP 桥接（Node），见“让 AIRI 进入这个世界” |
 | `art/` | Blender 源文件，以及网页版使用的 Kenney 家具素材包 |
 | `tools/kimodo` | 用 NVIDIA Kimodo 生成动作片段（`.vrma`）的脚本 |
 
@@ -92,7 +122,6 @@
 来自网页版（见 git 历史，截至 `157b50f`）：
 
 - LLM 大脑（兼容 OpenAI 接口）、记忆与反思、闲聊与偶遇、对话气泡与语音、按需做出的手势和表情；
-- AIRI 连接：`bridge/airi-mcp.mjs` 已保留，`Agent.Request(objectId, verb)` 是将来 Unity 端 WebSocket 客户端要调用的入口；
 - R1（上床前脱鞋）、有湖和小船的户外区域、帐篷；
 - Web（WebGL）构建和 GitHub Pages 在线演示。
 

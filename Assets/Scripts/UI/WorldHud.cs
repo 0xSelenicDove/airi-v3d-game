@@ -41,7 +41,9 @@ namespace AiWorld.UI
                 var line = a.Asleep ? "Zzz…" : a.Thought;
                 if (!string.IsNullOrEmpty(line)) GUI.Box(new Rect(p.x - 110, p.y - 56, 220, 40), line, bubble);
             }
-            GUI.Box(new Rect(10, 10, 560, 46 + 19 * agents.Length), info + "drag: orbit · right-drag: pan · scroll: zoom · F: follow · 1/2/3: speed", corner);
+            int lines = agents.Length;
+            if (Airi.AiriLink.Instance) { info += Airi.AiriLink.Instance.StatusText + "\n"; lines++; }
+            GUI.Box(new Rect(10, 10, 560, 46 + 19 * lines), info + "drag: orbit · right-drag: pan · scroll: zoom · F: follow · 1/2/3: speed", corner);
         }
     }
 }

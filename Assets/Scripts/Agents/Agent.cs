@@ -108,6 +108,12 @@ namespace AiWorld.Agents
             Debug.Log($"[{displayName}] {(GameClock.Instance ? GameClock.Instance.Clock : "")} ({text})");
         }
 
+        /// <summary>say something: the words show above the head (there is no speech or small talk yet)</summary>
+        public void Say(string text, float seconds = 5f) => Think($"“{text}”", seconds);
+
+        /// <summary>end the current activity early: the body gets up the proper way, then the brain decides again</summary>
+        public void StopActivity() => cutShort = true;
+
         // ------------------------------------------------------------------ the day
 
         IEnumerator Live()
