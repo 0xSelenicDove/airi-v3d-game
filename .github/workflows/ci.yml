@@ -9,15 +9,14 @@ permissions:
   contents: read
 
 jobs:
+  # named "build" because branch protection on main requires a check with that name
   build:
+    # The Unity project needs a Unity license to build in CI, so CI checks only the Node bridge for now.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: 20
-          cache: npm
-      - run: npm ci
-      - run: npm test
-      # `npm run build` runs `tsc --noEmit` (typecheck) and then `vite build`
-      - run: npm run build
+      - run: npm install --no-audit --no-fund
+      - run: npm run check

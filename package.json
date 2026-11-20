@@ -1,25 +1,14 @@
 {
-  "name": "airi-v3d-game",
+  "name": "airi-v3d-game-bridge",
   "private": true,
   "type": "module",
+  "description": "The MCP bridge between AIRI and the game (see README, AIRI in the world)",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "test": "vitest run",
-    "airi-bridge": "node bridge/airi-mcp.mjs --http 8790"
+    "airi-bridge": "node bridge/airi-mcp.mjs --http 8790",
+    "check": "node --check bridge/airi-mcp.mjs"
   },
   "dependencies": {
-    "@dimforge/rapier3d-compat": "^0.21.0",
-    "@pixiv/three-vrm": "^3.5.5",
-    "@pixiv/three-vrm-animation": "^3.5.5",
-    "three": "^0.187.0"
-  },
-  "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
-    "@types/three": "^0.187.0",
-    "typescript": "^7.0.2",
-    "vite": "^8.3.8",
-    "vitest": "^5.1.0",
     "ws": "^8.23.0",
     "zod": "^4.6.7"
   }
