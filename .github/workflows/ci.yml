@@ -9,7 +9,8 @@ permissions:
   contents: read
 
 jobs:
-  bridge:
+  # named "build" because branch protection on main requires a check with that name
+  build:
     # The Unity project needs a Unity license to build in CI, so CI checks only the Node bridge for now.
     runs-on: ubuntu-latest
     steps:
