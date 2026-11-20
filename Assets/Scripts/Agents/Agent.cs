@@ -12,7 +12,8 @@ namespace AiWorld.Agents
     ///
     ///  R0  nothing passes through anything else: walking is on the NavMesh, doors and lids are rigid bodies, and
     ///      the body has colliders;
-    ///  R2  to lie down, walk to the side of the bed, sit on its edge, then lie down, and get up the same way;
+    ///  R2  to lie down, walk to the side of the bed, turn the quilt back, sit on its edge, lift the legs onto the
+    ///      bed, lie down and pull the quilt over; get up the same way in reverse;
     ///  R3  to pass the door, take its handle, walk with it as it swings, go round it, and close it from the other side;
     ///  R4  when the way is blocked, stop and think, try another way, and give up after a few tries.
     /// </summary>
@@ -326,58 +327,103 @@ namespace AiWorld.Agents
         {
             yield return WalkTo(bed.side.position);
             if (!ok) yield break;
-            Doing = "getting into bed";
-            // turn the back to the bed and sit down on its edge
-            yield return TurnTo(bed.sit.forward, 0.6f);
             Manual(true);
+
+            // bend over the bed, take the quilt by its edge and turn it back onto the half by the wall
+            Doing = "turning the quilt back";
+            yield return TurnBlanket(bed, 1f);
+
+            // turn the back to the bed and sit down on its edge, the feet on the floor
+            Doing = "getting into bed";
+            yield return TurnTo(bed.sit.forward, 0.6f);
             nav.enabled = false;
             rig.Play(AvatarRig.Sit, 0.9f);
             rig.HoldHipsAt(bed.mattressTop + 0.06f);
+            rig.PlantFeet(bed.sit.position, bed.sit.forward);
             yield return Glide(bed.sit, 0.9f);
             yield return new WaitForSeconds(0.4f);
 
-            // fold the blanket back with the hand nearest the pillow (from now on the blanket knows where the body is)
-            bed.blanket.SetBodyColliders(rig.ClothCapsules, bed.mattress);
-            rig.Reach(AvatarIKGoal.LeftHand, bed.blanket.edge);
-            yield return new WaitForSeconds(0.5f);
-            bed.blanket.Fold(1f);
-            while (bed.blanket.Folded < 0.3f) yield return null;
-            rig.LetGo(AvatarIKGoal.LeftHand);     // out of reach: it is thrown back toward the foot end
-            while (bed.blanket.Folded < 0.95f) yield return null;
-
-            // swing the legs up and lie back: the body turns about the hips while it reclines
-            rig.Play(AvatarRig.Lie, 1.8f);
+            // lift the legs straight out (clear of the mattress), then turn on the seat so they swing over the bed
+            rig.PlantFeet(null);
+            rig.Play(AvatarRig.BedSit, 0.8f);
             rig.HoldHipsAt(bed.mattressTop + 0.1f);
-            yield return Glide(bed.lie, 1.8f);
+            yield return new WaitForSeconds(0.85f);
+            yield return Glide(bed.swing, 1.1f);
+            yield return new WaitForSeconds(0.2f);
+
+            // lie back, the head to the pillow, the legs staying on the mattress
+            rig.Play(AvatarRig.LieDown, 0.25f);
+            yield return Glide(bed.lie, 1.6f);
+            rig.Play(AvatarRig.Lie, 0.5f);
+            yield return new WaitForSeconds(0.4f);
+
+            // and pull the quilt back over: it lands on the body from above (the body is a cloth collider)
             bed.blanket.SetBodyColliders(rig.ClothCapsules, bed.mattress);
-            // size the blanket's view of the body to the outfit as it lies (wide sleeves, skirts), and rest its edge on the chest
-            bed.blanket.CoverAt(rig.FitClothCapsules());
-            bed.blanket.Cover(true);
+            rig.FitClothCapsules();
+            bed.blanket.Sleeper(true, rig.ClothCapsules);
             bed.blanket.Fold(0f);
+            while (bed.blanket.Folded > 0.02f) yield return null;
             Asleep = true;
             // sleep through the night: once the time is up, sleep on until morning (unless asked to get up)
             yield return Activity(aff);
             while (!cutShort && IsNight()) yield return null;   // still sleeping (and resting): Doing stays "sleep"
             Asleep = false;
 
+            // getting up is the same in reverse: the quilt back, sit up, swing the legs down, stand
             Doing = "getting up";
             bed.blanket.Fold(1f);
-            yield return new WaitForSeconds(1.2f);
-            rig.Play(AvatarRig.Sit, 1.6f);
-            rig.HoldHipsAt(bed.mattressTop + 0.06f);
-            yield return Glide(bed.sit, 1.6f);
+            while (bed.blanket.Folded < 0.98f) yield return null;
+            rig.Play(AvatarRig.SitUp, 0.3f);
+            yield return Glide(bed.swing, 1.6f);
+            rig.Play(AvatarRig.BedSit, 0.4f);
             bed.blanket.SetBodyColliders(null, bed.mattress);
             rig.UnfitClothCapsules();
-            bed.blanket.Cover(false);
-            bed.blanket.Fold(0f);
-            yield return StandUp(bed.side);
+            bed.blanket.Sleeper(false);
+            yield return new WaitForSeconds(0.2f);
+            yield return Glide(bed.sit, 1.1f);
+            rig.Play(AvatarRig.Sit, 0.8f);
+            rig.HoldHipsAt(bed.mattressTop + 0.06f);
+            rig.PlantFeet(bed.sit.position, bed.sit.forward);
+            yield return new WaitForSeconds(0.9f);
+            yield return StandUp(bed.side, rejoinNav: false);
+
+            // make the bed: lay the quilt back over it
+            Doing = "making the bed";
+            yield return TurnBlanket(bed, 0f);
+            Manual(false);
         }
 
-        /// <summary>stand up over the feet; <paramref name="rejoinNav"/> = false where the NavMesh does not reach (beside a desk)</summary>
+        /// <summary>standing beside the bed: bend over, take the quilt's edge, and turn it back (1) or lay it over (0)</summary>
+        IEnumerator TurnBlanket(BedParts bed, float to)
+        {
+            yield return TurnTo(-bed.side.forward, 0.5f);
+            rig.Play(AvatarRig.Stoop, 0.6f);
+            rig.LookAt(bed.blanket.grip.position);
+            yield return new WaitForSeconds(0.35f);
+            rig.Reach(AvatarIKGoal.RightHand, bed.blanket.grip);
+            float wait = 0;
+            while (!rig.HandArrived(AvatarIKGoal.RightHand) && (wait += Time.deltaTime) < 1f) yield return null;
+            bed.blanket.Fold(to);
+            // the hand goes with the edge as far as it reaches, then lets the quilt's weight carry it over
+            while (Mathf.Abs(bed.blanket.Folded - to) > 0.55f) { rig.LookAt(bed.blanket.grip.position); yield return null; }
+            rig.LetGo(AvatarIKGoal.RightHand);
+            rig.Play(AvatarRig.Locomotion, 0.7f);
+            while (Mathf.Abs(bed.blanket.Folded - to) > 0.02f) yield return null;
+            rig.LookAt(null);
+            yield return new WaitForSeconds(0.3f);
+        }
+
+        /// <summary>
+        /// stand up over the planted feet: lean forward first, then rise as the hips move over the feet;
+        /// <paramref name="rejoinNav"/> = false where the NavMesh does not reach (beside a desk) or more follows by hand
+        /// </summary>
         IEnumerator StandUp(Transform to, bool rejoinNav = true)
         {
+            rig.Play(AvatarRig.SitLean, 0.45f);
+            yield return new WaitForSeconds(0.45f);
             rig.Play(AvatarRig.Locomotion, 0.8f);
             rig.HoldHipsAt(null);
+            rig.PlantFeet(null);
             yield return Glide(to, 0.8f);
             if (rejoinNav) Manual(false);
         }
@@ -403,11 +449,13 @@ namespace AiWorld.Agents
             nav.enabled = false;
             rig.Play(AvatarRig.Sit, 0.8f);
             rig.HoldHipsAt(desk.seatTop + 0.07f);
+            rig.PlantFeet(chair.seat.position, chair.seat.forward);
             yield return Glide(chair.seat, 0.8f);
-            // and slide in to the desk with the chair
+            // and slide in to the desk with the chair, the feet walking it in
             chair.Slide(0f, 0.35f);
-            while (chair.Moving) { transform.position = chair.seat.position; yield return null; }
+            while (chair.Moving) { transform.position = chair.seat.position; rig.PlantFeet(chair.seat.position, chair.seat.forward); yield return null; }
             transform.position = chair.seat.position;
+            rig.PlantFeet(chair.seat.position, chair.seat.forward);
 
             // open the lid with the right hand
             rig.Reach(AvatarIKGoal.RightHand, desk.lidEdge);
@@ -432,7 +480,7 @@ namespace AiWorld.Agents
             // slide out with the chair, stand up over the feet, step out and push the chair back in
             Doing = "getting up";
             chair.Slide(1f, 0.35f);
-            while (chair.Moving) { transform.position = chair.seat.position; yield return null; }
+            while (chair.Moving) { transform.position = chair.seat.position; rig.PlantFeet(chair.seat.position, chair.seat.forward); yield return null; }
             yield return StandUp(desk.stepIn, rejoinNav: false);
             Manual(true);
             yield return StepTo(desk.side.position, -Flat(desk.side.position - desk.stepIn.position));

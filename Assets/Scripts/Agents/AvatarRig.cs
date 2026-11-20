@@ -10,6 +10,7 @@ namespace AiWorld.Agents
     ///
     ///  * cross-fades between body states (walk, sit, type, lie), so every change of pose is a blend over time;
     ///  * places a hand on a target with IK (a door handle, a fridge door, a laptop lid) and blends it in and out;
+    ///  * keeps the feet planted on the floor while sitting, so the legs never hang into a seat or a mattress;
     ///  * turns the head and the eyes toward what the character attends to, and blinks;
     ///  * lifts or lowers the whole model so the hips rest on the seat or the mattress, whatever the avatar's size;
     ///  * gives the body capsule colliders, so doors stop against it and the blanket lies over it.
@@ -17,7 +18,8 @@ namespace AiWorld.Agents
     [RequireComponent(typeof(Animator))]
     public class AvatarRig : MonoBehaviour
     {
-        public const string Locomotion = "Locomotion", Sit = "Sit", Type = "Type", Lie = "Lie", Eat = "Eat";
+        public const string Locomotion = "Locomotion", Sit = "Sit", Type = "Type", Lie = "Lie", Eat = "Eat",
+            SitLean = "SitLean", BedSit = "BedSit", Stoop = "Stoop", LieDown = "LieDown", SitUp = "SitUp";
 
         Animator anim;
         Vrm10Instance vrm;
@@ -25,6 +27,10 @@ namespace AiWorld.Agents
         float hipsOffset;
         float? hipsTarget;
         readonly HandIk left = new(), right = new();
+        Vector3? feetAt;
+        Vector3 feetForward;
+        float feetWeight;
+        float ankleHeight = 0.08f, thighLength = 0.4f, shinLength = 0.4f, hipWidth = 0.18f;
         Vector3? lookAt;
         float lookWeight;
         Transform eyeTarget;
@@ -35,7 +41,7 @@ namespace AiWorld.Agents
         public float Height { get; private set; } = 1.6f;
         public CapsuleCollider[] BodyCapsules { get; private set; } = new CapsuleCollider[0];
         /// <summary>
-        /// fat capsules for cloth only (a blanket): round both legs, round the torso, and round each arm. Cloth collides
+        /// fat capsules for cloth only (a blanket): round both thighs, both shins, the torso, and round each arm. Cloth collides
         /// at its vertices (~6 cm apart), so it slips round thin limb capsules, and the clothes (wide sleeves, skirts)
         /// stick out further than the body. <see cref="FitClothCapsules"/> sizes them to the outfit as it lies.
         /// </summary>
@@ -68,6 +74,14 @@ namespace AiWorld.Agents
             hips = anim.GetBoneTransform(HumanBodyBones.Hips);
             var head = anim.GetBoneTransform(HumanBodyBones.Head);
             if (head) Height = head.position.y - transform.position.y + 0.12f;
+            var lf = anim.GetBoneTransform(HumanBodyBones.LeftFoot);
+            var rf = anim.GetBoneTransform(HumanBodyBones.RightFoot);
+            var lt = anim.GetBoneTransform(HumanBodyBones.LeftUpperLeg);
+            var lk = anim.GetBoneTransform(HumanBodyBones.LeftLowerLeg);
+            if (lf) ankleHeight = Mathf.Max(0.04f, lf.position.y - transform.position.y);
+            if (lt && lk) thighLength = Vector3.Distance(lt.position, lk.position);
+            if (lk && lf) shinLength = Vector3.Distance(lk.position, lf.position);
+            if (lf && rf) hipWidth = Mathf.Clamp(Vector3.Distance(lf.position, rf.position), 0.12f, 0.3f);
             eyeTarget = new GameObject("EyeTarget").transform;
             eyeTarget.SetParent(transform.parent, false);
             if (vrm)
@@ -95,7 +109,9 @@ namespace AiWorld.Agents
             }
             proxies = new[]
             {
-                Make("Cloth Legs", 0.15f * sc, HumanBodyBones.LeftUpperLeg, HumanBodyBones.RightUpperLeg, HumanBodyBones.LeftFoot, HumanBodyBones.RightFoot, 0.12f * sc),
+                // the legs side by side: thighs and shins apart, so bent knees stay under the blanket
+                Make("Cloth Thighs", 0.15f * sc, HumanBodyBones.LeftUpperLeg, HumanBodyBones.RightUpperLeg, HumanBodyBones.LeftLowerLeg, HumanBodyBones.RightLowerLeg, 0.02f * sc),
+                Make("Cloth Shins", 0.12f * sc, HumanBodyBones.LeftLowerLeg, HumanBodyBones.RightLowerLeg, HumanBodyBones.LeftFoot, HumanBodyBones.RightFoot, 0.12f * sc),
                 // the torso ends at the neck with its round end pulled in, so it never reaches round the head
                 Make("Cloth Torso", 0.17f * sc, HumanBodyBones.Hips, HumanBodyBones.Hips, HumanBodyBones.Neck, HumanBodyBones.Neck, 0f, trimEnd: true),
                 Make("Cloth Left Arm", 0.06f * sc, HumanBodyBones.LeftUpperArm, HumanBodyBones.LeftUpperArm, HumanBodyBones.LeftHand, HumanBodyBones.LeftHand, 0.08f * sc, trimStart: true),
@@ -183,7 +199,7 @@ namespace AiWorld.Agents
                 x.c.radius = Mathf.Min(r, maxRadius);
             }
             UpdateClothProxies();
-            var torso = proxies[1];
+            var torso = System.Array.Find(proxies, x => x.c.name == "Cloth Torso");
             return Mathf.Max(torso.A.y, torso.B.y) + torso.c.radius;
         }
 
@@ -222,10 +238,29 @@ namespace AiWorld.Agents
 
         public void LookAt(Vector3? point) => lookAt = point;
 
+        /// <summary>the thigh length (m): how far in front of the hips the knees are when sitting</summary>
+        public float ThighLength => thighLength;
+
+        /// <summary>
+        /// plant both feet flat on the floor (world y = <paramref name="floorY"/>), side by side, a thigh's length in
+        /// front of where the hips sit; the knees bend to suit. Null lets the clip place the feet again.
+        /// </summary>
+        public void PlantFeet(Vector3? hipsOnSeat, Vector3 forward = default, float floorY = 0f)
+        {
+            if (hipsOnSeat is Vector3 h)
+            {
+                feetForward = new Vector3(forward.x, 0, forward.z).normalized;
+                var p = h + feetForward * (thighLength + 0.04f);
+                feetAt = new Vector3(p.x, floorY + ankleHeight, p.z);
+            }
+            else feetAt = null;
+        }
+
         void Update()
         {
             BlendHand(left);
             BlendHand(right);
+            feetWeight = Mathf.MoveTowards(feetWeight, feetAt.HasValue ? 1f : 0f, Time.deltaTime * 1.6f);
             lookWeight = Mathf.MoveTowards(lookWeight, lookAt.HasValue ? 1f : 0f, Time.deltaTime * 1.5f);
             if (lookAt.HasValue) eyeTarget.position = Vector3.Lerp(eyeTarget.position, lookAt.Value, Time.deltaTime * 6f);
             else eyeTarget.position = transform.position + transform.forward * 3f + Vector3.up * Height * 0.92f;
@@ -238,9 +273,37 @@ namespace AiWorld.Agents
         {
             ApplyHand(AvatarIKGoal.LeftHand, left);
             ApplyHand(AvatarIKGoal.RightHand, right);
+            ApplyFeet();
             var look = lookAt ?? eyeTarget.position;
             anim.SetLookAtWeight(lookWeight * 0.8f, 0.2f, 0.7f, 1f, 0.6f);
             anim.SetLookAtPosition(look);
+        }
+
+        Vector3 lastFeet;
+
+        void ApplyFeet()
+        {
+            if (feetAt.HasValue)
+            {
+                lastFeet = feetAt.Value;
+                // short legs on a high seat do not reach the floor: then they hang, the shins straight down
+                if (hips) lastFeet.y = Mathf.Max(lastFeet.y, hips.position.y - 0.05f - shinLength * 0.97f);
+            }
+            float w = Mathf.SmoothStep(0, 1, feetWeight);
+            var right = Vector3.Cross(Vector3.up, feetForward);
+            var rot = feetForward.sqrMagnitude > 0.5f ? Quaternion.LookRotation(feetForward, Vector3.up) : transform.rotation;
+            foreach (var (goal, hint, side) in new[] { (AvatarIKGoal.LeftFoot, AvatarIKHint.LeftKnee, -1f), (AvatarIKGoal.RightFoot, AvatarIKHint.RightKnee, 1f) })
+            {
+                anim.SetIKPositionWeight(goal, w);
+                anim.SetIKRotationWeight(goal, w);
+                if (w <= 0f) { anim.SetIKHintPositionWeight(hint, 0); continue; }
+                var foot = lastFeet + right * (side * hipWidth * 0.5f);
+                anim.SetIKPosition(goal, foot);
+                anim.SetIKRotation(goal, rot);
+                // the knees point forward over the feet
+                anim.SetIKHintPosition(hint, foot + feetForward * 0.25f + Vector3.up * 0.35f);
+                anim.SetIKHintPositionWeight(hint, w * 0.6f);
+            }
         }
 
         void ApplyHand(AvatarIKGoal goal, HandIk h)

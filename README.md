@@ -65,7 +65,7 @@ Walls between the camera and the room hide themselves (they still cast shadows).
 | Path | What is there |
 | --- | --- |
 | `Assets/Scripts/Agents` | `Agent` (needs, the day loop, and the routines that do each action), `AvatarRig` (the body: Animator, IK, look-at, blinking, body colliders), `MockBrain` (picks what to do next; an LLM brain plugs into `IBrain`) |
-| `Assets/Scripts/World` | `Hinged` (doors and lids), `SoftBlanket` (the cloth blanket), `Interactable` and `Affordance` (what a thing lets you do), `House` (inside or outside, the front door), `GameClock`, `WallCutaway`, and the `*Parts` components that hold the points a routine needs |
+| `Assets/Scripts/World` | `Hinged` (doors and lids), `SoftBlanket` (the cloth quilt, turned back on a hinge), `QuiltShell` (draws the cloth as a thick quilted duvet), `Interactable` and `Affordance` (what a thing lets you do), `House` (inside or outside, the front door), `GameClock`, `WallCutaway`, and the `*Parts` components that hold the points a routine needs |
 | `Assets/Scripts/Editor` | `SliceSceneBuilder` (builds the scene), `ClipFactory` (makes the humanoid clips and the Animator Controller), `BatchTools` (command-line entry points) |
 | `Assets/Art/Props` | The props, exported by `tools/blender/build_props.py` |
 | `Assets/Animations` | `Character.controller`; `Generated/` holds the made clips; put motion capture in `Mocap/` |
@@ -75,7 +75,7 @@ Walls between the camera and the room hide themselves (they still cast shadows).
 
 ### Motion capture
 
-The clips in `Assets/Animations/Generated` (idle, walk, sit, type, lie, eat) are made from humanoid muscle values by `ClipFactory`. They play on any VRM, but they are placeholders. **Real motion capture is the biggest step up in quality:** put a humanoid clip named `Idle`, `Walk`, `Sit`, `Type`, `Lie` or `Eat` (an `.fbx` with its rig set to Humanoid, or an `.anim`) in `Assets/Animations/Mocap`, then run **AiWorld ▸ Build Animator**. Mixamo (free with an Adobe account) and the Unity Asset Store have suitable clips.
+The clips in `Assets/Animations/Generated` (idle, walk, sit, type, lie, eat, and the in-between poses for getting into and out of bed) are made from humanoid muscle values by `ClipFactory`. They play on any VRM, but they are placeholders. **Real motion capture is the biggest step up in quality:** put a humanoid clip named `Idle`, `Walk`, `Sit`, `Type`, `Lie` or `Eat` (an `.fbx` with its rig set to Humanoid, or an `.anim`) in `Assets/Animations/Mocap`, then run **AiWorld ▸ Build Animator**. Mixamo (free with an Adobe account) and the Unity Asset Store have suitable clips.
 
 ### Props
 
