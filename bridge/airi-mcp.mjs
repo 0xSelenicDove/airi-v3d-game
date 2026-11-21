@@ -4,14 +4,16 @@
  * The MCP bridge between AIRI (or any MCP client) and the game. AIRI lives in the world as the character Airi and
  * decides for herself through these tools; the other characters stay NPCs. See README "AIRI in the world".
  *
- *   AIRI ⇄ MCP (stdio, or Streamable HTTP) ⇄ this bridge ⇄ WebSocket on 127.0.0.1 ⇄ the game page (src/airi.ts)
+ *   AIRI ⇄ MCP (stdio, or Streamable HTTP) ⇄ this bridge ⇄ WebSocket on 127.0.0.1 ⇄ the game
+ *
+ * The game is the Unity project (Assets/Scripts/Airi/AiriLink.cs), which connects by itself while it runs.
  *
  * Usage (from the repository root, after `npm install`):
  *   node bridge/airi-mcp.mjs                  MCP over stdio: AIRI starts this command itself
  *   node bridge/airi-mcp.mjs --http 8790      MCP over Streamable HTTP at http://127.0.0.1:8790/mcp
  * Options:
- *   --ws <port>              where the game page connects (default 8789; open the game with ?airi)
- *   --origin <origin,...>    more game page origins to accept, besides localhost and the live demo
+ *   --ws <port>              where the game connects (default 8789)
+ *   --origin <origin,...>    web page origins to accept, besides localhost and the live demo
  *
  * Logs go to stderr: in stdio mode, stdout carries the MCP messages.
  */
@@ -29,7 +31,7 @@ import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js'
 export const DEFAULT_WS_PORT = 8789
 /** the live demo (GitHub Pages); it reaches a bridge on this computer only when opened with ?airi */
 export const DEMO_ORIGIN = 'https://0xselenicdove.github.io'
-/** how long the bridge waits for the game page to answer a request */
+/** how long the bridge waits for the game to answer a request */
 const ANSWER_MS = 5000
 /** events kept for wait_for_event while nobody asks; older ones are dropped */
 const MAX_EVENTS = 200
@@ -39,13 +41,15 @@ const STREAM_GRACE_MS = Number(process.env.AIRI_MCP_STREAM_GRACE_MS ?? 3000)
 const log = (/** @type {string} */ msg) => process.stderr.write(`[airi-mcp] ${msg}\n`)
 
 /**
- * A game page may connect from this origin: a page served from this computer, the live demo, or one the user
- * named. Any other web page is refused, so it cannot pose as the game and feed AIRI made-up observations.
+ * The game may connect from here. A client that is not a web page (the Unity game) sends no Origin header, and is
+ * accepted: a browser always sends one, so a web page cannot leave it out. A web page is accepted only from this
+ * computer, the live demo, or an origin the user named; any other is refused, so it cannot pose as the game and feed
+ * AIRI made-up observations.
  * @param {string | undefined} origin
  * @param {string[]} extra
  */
 export function pageOriginAllowed(origin, extra = []) {
-  if (!origin) return false
+  if (origin === undefined) return true
   if (origin === DEMO_ORIGIN || extra.includes(origin)) return true
   try {
     const u = new URL(origin)
@@ -55,7 +59,7 @@ export function pageOriginAllowed(origin, extra = []) {
   }
 }
 
-/** The one game page connected over the WebSocket: requests to it, and the events it reports. */
+/** The one game connected over the WebSocket: requests to it, and the events it reports. */
 export class GameLink {
   constructor() {
     /** @type {import('ws').WebSocket | null} */
@@ -74,15 +78,15 @@ export class GameLink {
   /** @param {import('ws').WebSocket} ws */
   attach(ws) {
     // one game at a time: a newly opened page takes over from the old one
-    if (this.page) this.page.close(4000, 'another game page connected')
+    if (this.page) this.page.close(4000, 'another game connected')
     this.page = ws
-    log('game page connected')
+    log('game connected')
     ws.on('message', data => this.receive(String(data)))
     ws.on('close', () => {
       if (this.page !== ws) return
       this.page = null
-      log('game page left')
-      for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(new Error('the game page closed')) }
+      log('game left')
+      for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(new Error('the game closed')) }
       this.pending.clear()
     })
     this.sendControl()
@@ -119,7 +123,7 @@ export class GameLink {
   }
 
   /**
-   * Ask the game page something and wait for its answer.
+   * Ask the game something and wait for its answer.
    * @param {'status' | 'look' | 'act'} method
    * @param {Record<string, unknown>} [params]
    */
@@ -130,7 +134,7 @@ export class GameLink {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id)
-        reject(new Error('the game page did not answer in time (is its tab in the background?)'))
+        reject(new Error('the game did not answer in time (is it paused?)'))
       }, ANSWER_MS)
       this.pending.set(id, { resolve, reject, timer })
       page.send(JSON.stringify({ id, method, params }))
@@ -153,8 +157,8 @@ export class GameLink {
   }
 }
 
-const NO_GAME = 'The game is not open, or it was opened without ?airi. Open the game page with ?airi in its address '
-  + '(for example http://localhost:5173/?airi), and it connects to this bridge.'
+const NO_GAME = 'The game is not running. Start it (in the Unity editor, open Assets/Scenes/Room.unity and press Play), '
+  + 'and it connects to this bridge by itself.'
 
 /** @param {unknown} value */
 const ok = value => ({ content: [{ type: /** @type {const} */ ('text'), text: JSON.stringify(value, null, 1) }] })
@@ -167,9 +171,9 @@ const fail = err => ({ content: [{ type: /** @type {const} */ ('text'), text: er
  */
 export function createMcpServer(link) {
   const server = new McpServer({ name: 'airi-v3d-game', version: '1.0.0' }, {
-    instructions: 'You live in a small 3D world as the character Airi: a house with a fenced yard, and a meadow with a pond, '
-      + 'a lake, a campfire and a tent. Luna lives there too. Your body has needs (energy, fun, knowledge) that change over '
-      + 'time. While you are connected, you decide for yourself: use look to see your situation, act to do something, and '
+    instructions: 'You live in a small 3D world as the character Airi: a house with a bed, a desk with a laptop, a fridge '
+      + 'and a front door to the yard. Luna lives there too. Your body has needs (energy, fun, knowledge, hunger) that change '
+      + 'over time. While you are connected, you decide for yourself: use look to see your situation, act to do something, and '
       + 'wait_for_event to hear what happens next (an activity ends, someone speaks to you, or it is your turn to decide). '
       + 'If you give no action for a while (60 s by default) when it is your turn, your own habits choose that one thing for '
       + 'you, and you get an "autopilot" event; act with interrupt: true to change it.',
@@ -177,7 +181,7 @@ export function createMcpServer(link) {
 
   server.registerTool('world_status', {
     title: 'World status',
-    description: 'The time in the world, what you (Airi) and the others are doing and where, and the gestures and emotions act accepts.',
+    description: 'The time in the world, what you (Airi) and the others are doing and where, and what act can do in this version.',
     annotations: { readOnlyHint: true },
   }, async () => {
     try { return ok(await link.request('status')) } catch (e) { return fail(e) }
@@ -185,8 +189,8 @@ export function createMcpServer(link) {
 
   server.registerTool('look', {
     title: 'Look around',
-    description: 'What you see right now: your needs and what you are doing, the things you can use (object ids and their '
-      + 'verbs, and who uses them), the people nearby, what you heard, your recent memories, and what came of your last action.',
+    description: 'What you see right now: your needs and what you are doing, the things you can use (object ids, their '
+      + 'verbs now, and who uses them), and the people nearby.',
     annotations: { readOnlyHint: true },
   }, async () => {
     try { return ok(await link.request('look')) } catch (e) { return fail(e) }
@@ -195,9 +199,9 @@ export function createMcpServer(link) {
   server.registerTool('act', {
     title: 'Act',
     description: 'Do something as Airi. type "interact": use an object (object id and verb from look, for example bed + sleep). '
-      + '"say": speak aloud to whoever is near (text, and optionally a gesture). "gesture": act something out (a name from '
-      + 'world_status). "wait": stay put for some game minutes. If you are busy with an activity, the action runs when it ends, '
-      + 'unless interrupt is true, which ends the activity first (you get up the usual way).',
+      + '"say": say something (the words show above your head). "wait": stay put for some game minutes. Gestures are not '
+      + 'in this version yet. If you are busy with an activity, the action runs when it ends, unless interrupt is true, '
+      + 'which ends the activity first (you get up the usual way).',
     inputSchema: {
       type: z.enum(['interact', 'say', 'gesture', 'wait']),
       object: z.string().optional().describe('interact: the object id, from look'),
@@ -215,7 +219,7 @@ export function createMcpServer(link) {
 
   server.registerTool('wait_for_event', {
     title: 'Wait for something to happen',
-    description: 'What has happened to you since you last asked: things you did and noticed, words you heard, "turn" '
+    description: 'What has happened to you since you last asked: what you started doing and thought, "turn" '
       + 'events when you are waiting for your next decision, and "autopilot" events when your habits decided because you '
       + 'gave no action in time. If nothing has happened yet, waits up to timeout_seconds.',
     inputSchema: { timeout_seconds: z.number().min(1).max(120).optional().describe('how long to wait, default 30') },
@@ -230,7 +234,7 @@ export function createMcpServer(link) {
 }
 
 /**
- * Start the bridge: the WebSocket for the game page, and MCP over stdio or HTTP.
+ * Start the bridge: the WebSocket for the game, and MCP over stdio or HTTP.
  * @param {{ wsPort?: number, httpPort?: number, origins?: string[], stdio?: boolean }} opts
  */
 export async function startBridge(opts = {}) {
@@ -241,14 +245,14 @@ export async function startBridge(opts = {}) {
     port: opts.wsPort ?? DEFAULT_WS_PORT,
     verifyClient: ({ origin }) => {
       const okOrigin = pageOriginAllowed(origin, origins)
-      if (!okOrigin) log(`refused a page from ${origin || 'no origin'} (add it with --origin if it is your game)`)
+      if (!okOrigin) log(`refused a page from ${origin || 'an empty origin'} (add it with --origin if it is your game)`)
       return okOrigin
     },
   })
   await new Promise((resolve, reject) => { wss.once('listening', resolve); wss.once('error', reject) })
   wss.on('connection', ws => link.attach(ws))
   const wsPort = /** @type {import('node:net').AddressInfo} */ (wss.address()).port
-  log(`waiting for the game page on ws://127.0.0.1:${wsPort} (open the game with ?airi)`)
+  log(`waiting for the game on ws://127.0.0.1:${wsPort} (start it, and it connects)`)
 
   /** @type {() => Promise<void>} */
   let closeMcp = async () => {}

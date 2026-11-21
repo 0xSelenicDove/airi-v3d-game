@@ -6,7 +6,7 @@ A small 3D world driven entirely by AI. Think "VRChat, but the inhabitants are A
 
 Built with **Unity 6** (URP), [UniVRM](https://github.com/vrm-c/UniVRM), Unity's NavMesh and its physics.
 
-> **Status: Unity migration, milestone 1 (vertical slice).** The game moved from three.js to Unity because the web version could not get past its limits: props that do not come apart, stiff procedural motion, and doors without weight. This branch has one house with a working door, bed, desk and fridge, two characters, and the rule-based mock brain. The LLM brain, memory, small talk, speech and the AIRI bridge from the web version are **not ported yet**; they are in git history (the last web version is commit `157b50f`).
+> **Status: Unity migration, milestone 1 (vertical slice).** The game moved from three.js to Unity because the web version could not get past its limits: props that do not come apart, stiff procedural motion, and doors without weight. This branch has one house with a working door, bed, desk and fridge, two characters, and the rule-based mock brain. AIRI can live in it as Airi through the MCP bridge (see below). The LLM brain, memory, small talk and speech from the web version are **not ported yet**; they are in git history (the last web version is commit `157b50f`).
 
 ![Night in the house: Luna asleep under her blanket, Airi coming in and closing the front door](docs/images/overview.jpg)
 
@@ -60,6 +60,35 @@ Put your models at `Assets/Avatars/User/model.vrm` (Airi) and `Assets/Avatars/Us
 
 Walls between the camera and the room hide themselves (they still cast shadows).
 
+## AIRI in the world (MCP)
+
+[AIRI](https://github.com/moeru-ai/airi), or any other MCP client, can live in the world as **Airi** and decide for herself. Luna stays an NPC with her own brain.
+
+```
+AIRI ⇄ MCP (stdio or HTTP) ⇄ bridge/airi-mcp.mjs ⇄ WebSocket (127.0.0.1:8789) ⇄ the game (AiriLink)
+```
+
+1. Run `npm install` in this repository (for the bridge).
+2. Add the bridge to AIRI's MCP servers (its `mcp.json`). Choose one:
+   - stdio: AIRI starts the bridge itself.
+     ```json
+     { "mcpServers": { "airi-v3d-game": { "command": "node", "args": ["<path to airi-v3d-game>/bridge/airi-mcp.mjs"] } } }
+     ```
+   - HTTP: start the bridge yourself with `npm run airi-bridge`, then use `{ "url": "http://127.0.0.1:8790/mcp" }`.
+3. Press Play in `Assets/Scenes/Room.unity`. The game connects to the bridge by itself, and keeps trying every 3 s while the bridge is not running. The HUD shows `AIRI: connected, playing Airi`.
+
+| Tool | What it does |
+| --- | --- |
+| `world_status` | The time, and what Airi and Luna are doing and where |
+| `look` | Airi's needs and activity, the things she can use (ids and verbs open now, and who uses them), and Luna |
+| `act` | `interact` with an object, `say` something (the words show above Airi's head), or `wait`. `interrupt: true` ends the current activity first |
+| `wait_for_event` | What Airi started doing and thought, `turn` when she waits for a decision, and `autopilot` when her own brain decided |
+
+- While AIRI is connected, Airi waits for AIRI's next action. When AIRI gives no action for 60 s, Airi's own brain decides that one thing (autopilot), and AIRI gets an `autopilot` event. When AIRI disconnects, Airi goes back to her own brain.
+- `AiriLink` adds itself when the scene starts ([`Assets/Scripts/Airi`](Assets/Scripts/Airi)). Set its address and autopilot time on the component, or start a player build with `-airi-bridge ws://127.0.0.1:<port>` and `-airi-autopilot <seconds>`.
+- The bridge listens only on 127.0.0.1. It accepts the game, which sends no `Origin` header, and web pages only from this computer.
+- Gestures, emotions and speech are not in the Unity version yet, so `act` has no `gesture` type.
+
 ## Project layout
 
 | Path | What is there |
@@ -69,7 +98,8 @@ Walls between the camera and the room hide themselves (they still cast shadows).
 | `Assets/Scripts/Editor` | `SliceSceneBuilder` (builds the scene), `ClipFactory` (makes the humanoid clips and the Animator Controller), `BatchTools` (command-line entry points) |
 | `Assets/Art/Props` | The props, exported by `tools/blender/build_props.py` |
 | `Assets/Animations` | `Character.controller`; `Generated/` holds the made clips; put motion capture in `Mocap/` |
-| `bridge/` | The AIRI MCP bridge from the web version (Node). It still speaks the web page's protocol; the Unity side is not written yet. |
+| `Assets/Scripts/Airi` | `AiriLink` (the game's end of the AIRI bridge) and `AiriBrain` (Airi's brain while AIRI is connected) |
+| `bridge/` | The AIRI MCP bridge (Node), see AIRI in the world |
 | `art/` | Blender sources and the Kenney furniture kit used by the web version |
 | `tools/kimodo` | Scripts that make motion clips with NVIDIA's Kimodo (`.vrma`) |
 
@@ -92,7 +122,6 @@ A part named `<Prop>.Hinge.<Part>` swings on a hinge at its origin (about the ve
 From the web version (see git history up to `157b50f`):
 
 - the LLM brain (OpenAI-compatible endpoint), memory and reflection, small talk and chance meetings, speech bubbles and text-to-speech, gestures and facial expressions on request;
-- the AIRI connection: `bridge/airi-mcp.mjs` is kept, and `Agent.Request(objectId, verb)` is the hook a Unity-side WebSocket client will call;
 - R1 (shoes off before bed), the outdoor area with the lake and the rowboat, the tent;
 - a Web (WebGL) build and the GitHub Pages demo.
 
