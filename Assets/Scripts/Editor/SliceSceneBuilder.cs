@@ -185,9 +185,11 @@ namespace AiWorld.EditorTools
             var toMiddle = (-at).normalized;
             var side = Vector3.Dot(right, toMiddle) > 0 ? right : -right;
             var mid = at - headTo * 0.12f;                                       // a bit toward the foot end
-            parts.sit = Point(bed, "Sit", mid + side * (0.475f - 0.2f), side);
+            // sit near the edge (the thighs then reach past it and the feet stand on the floor), stand a step out
+            parts.sit = Point(bed, "Sit", mid + side * (0.475f - 0.13f), side);
             parts.side = Point(bed, "Side", mid + side * (0.475f + 0.3f), side);
-            parts.lie = Point(bed, "Lie", at - headTo * 0.18f, -headTo);
+            // lie a little toward the room, clear of the line the quilt turns back about (see MakeBlanket)
+            parts.lie = Point(bed, "Lie", at - headTo * 0.18f + side * 0.08f, -headTo);
             it.approach = parts.side;
 
             // the mattress, as capsules the blanket lies on
@@ -212,97 +214,211 @@ namespace AiWorld.EditorTools
                 c.isTrigger = true;    // for the cloth only
                 caps.Add(c);
             }
-            // the wall beside the bed, as far as the cloth is concerned (walls are not cloth colliders): a wide capsule
-            // sunk below the mattress top, inside the wall, so the blanket tucks against the wall instead of hanging
-            // through it, without rising up the wall into a flap
+            // the wall beside the bed, as far as the cloth is concerned (walls are not cloth colliders): a huge capsule
+            // inside the wall whose side is the wall's face (within 3 cm, from the floor to 1 m up), so the quilt
+            // stops at the wall and rides up against it instead of passing into it
             {
-                const float wr = 0.4f;
+                const float wr = 4f;
                 var g = new GameObject("Wall Stop");
                 g.transform.SetParent(capRoot.transform, false);
-                g.transform.position = at - side * (0.505f + wr + 0.02f - 0.09f) + Vector3.up * (parts.mattressTop - 0.25f);
+                g.transform.position = at - side * (0.505f + wr) + Vector3.up * (parts.mattressTop + 0.1f);
                 g.transform.rotation = Quaternion.LookRotation(headTo);
                 g.layer = MovableLayer;
                 var c = g.AddComponent<CapsuleCollider>();
                 c.direction = 2;
                 c.radius = wr;
-                c.height = 2.4f;
+                c.height = 2.6f + 2f * wr;
                 c.isTrigger = true;
                 caps.Add(c);
             }
             parts.mattress = caps.ToArray();
-            parts.blanket = MakeBlanket(bed, headTo, parts.mattress);
+            parts.blanket = MakeBlanket(bed, at, headTo, side, parts.mattressTop);
+            parts.blanket.GetComponent<Cloth>().capsuleColliders = parts.mattress;
             return bed;
         }
 
-        static SoftBlanket MakeBlanket(GameObject bed, Vector3 headTo, CapsuleCollider[] mattress)
+        /// <summary>
+        /// The quilt: one sheet of cloth vertices skinned to three bones, so it can be turned back by hand onto the half
+        /// by the wall (see SoftBlanket), and drawn as a thick quilted duvet (see QuiltShell).
+        /// </summary>
+        static SoftBlanket MakeBlanket(GameObject bed, Vector3 at, Vector3 headTo, Vector3 side, float mattressTop)
         {
+            const float HingeAcross = -0.26f;    // the turn-back line, toward the wall from the bed's middle (a sleeper lies on the room side of it)
+            const float HingeHeight = 0.03f;     // above the sheet: the folded half lies 6 cm over the other half, with a round crease
+            const float MattressHalfWidth = 0.475f, MattressHalfLength = 1.025f;
+
             var src = Find(bed, "Bed.Soft.Blanket");
             var mf = src.GetComponent<MeshFilter>();
             var mr = src.GetComponent<MeshRenderer>();
-            var mesh = Object.Instantiate(mf.sharedMesh);
-            mesh.name = "Blanket";
 
-            // the root bone holds the sheet; the edge bone holds the row of vertices nearest the pillow
-            var rootBone = src;
-            var edge = new GameObject("Blanket Edge").transform;
-            edge.SetParent(rootBone, false);
-            var verts = mesh.vertices;
-            var headLocal = rootBone.InverseTransformDirection(headTo).normalized;
-            float maxAlong = verts.Max(v => Vector3.Dot(v, headLocal));
-            var edgeCentre = verts.Where(v => Vector3.Dot(v, headLocal) > maxAlong - 0.01f).Aggregate(Vector3.zero, (a, v) => a + v)
-                             / verts.Count(v => Vector3.Dot(v, headLocal) > maxAlong - 0.01f);
-            edge.localPosition = edgeCentre;
+            var across = src.InverseTransformDirection(side).normalized;
+            var along = src.InverseTransformDirection(headTo).normalized;
+            var up = src.InverseTransformDirection(Vector3.up).normalized;
+            var centre = src.InverseTransformPoint(at + Vector3.up * mattressTop);   // the middle of the mattress top
+
+            // the quilt's own sheet (the modelled one hung far over the sides and the foot): the size of the mattress,
+            // a hand's width over the room side and the foot, none on the wall side; it rests just above the
+            // mattress's cloth capsules (their tops are 2 cm up), so at rest nothing pushes it and it lies still
+            const float NearEdge = MattressHalfWidth + 0.045f, FarEdge = -(MattressHalfWidth - 0.01f);
+            const float HeadEdge = 0.45f, FootEdge = -(MattressHalfLength + 0.035f), RestLift = 0.035f;
+            const int Cols = 16, Rows = 24;
+            var mesh = new Mesh { name = "Blanket" };
+            var verts = new Vector3[Cols * Rows];
+            var uvs = new Vector2[Cols * Rows];
+            for (int r = 0; r < Rows; r++)
+            for (int c = 0; c < Cols; c++)
+            {
+                float u = c / (float)(Cols - 1), w = r / (float)(Rows - 1);
+                verts[r * Cols + c] = centre + across * Mathf.Lerp(FarEdge, NearEdge, u) + along * Mathf.Lerp(FootEdge, HeadEdge, w) + up * RestLift;
+                uvs[r * Cols + c] = new Vector2(u, w);
+            }
+            var tris = new List<int>();
+            for (int r = 0; r < Rows - 1; r++)
+            for (int c = 0; c < Cols - 1; c++)
+            {
+                int q0 = r * Cols + c, q1 = q0 + 1, q2 = q0 + Cols, q3 = q2 + 1;
+                tris.AddRange(new[] { q0, q2, q1, q1, q2, q3 });
+            }
+            // face up
+            if (Vector3.Dot(Vector3.Cross(verts[tris[1]] - verts[tris[0]], verts[tris[2]] - verts[tris[0]]), up) < 0)
+                for (int i = 0; i < tris.Count; i += 3) (tris[i + 1], tris[i + 2]) = (tris[i + 2], tris[i + 1]);
+            mesh.vertices = verts;
+            mesh.uv = uvs;
+            mesh.SetTriangles(tris, 0);
+            mesh.RecalculateNormals();
+            mesh.RecalculateBounds();
+            float Across(Vector3 v) => Vector3.Dot(v - centre, across);
+            float Along(Vector3 v) => Vector3.Dot(v - centre, along);
+            var mean = verts.Aggregate(Vector3.zero, (acc, v) => acc + v) / verts.Length;
+
+            // the near half turns over about a line along the bed; the part that would land past the wall-side edge of
+            // the mattress turns again, up against the wall (a point at HingeAcross + d lands at HingeAcross - d)
+            // (it lands 4.5 cm in from the edge, so the thick quilt stands clear of the wall)
+            float wallCrease = 2f * HingeAcross + MattressHalfWidth - 0.045f;
+            var hinge = new GameObject("Blanket Hinge").transform;
+            hinge.SetParent(src, false);
+            hinge.localPosition = mean + across * (HingeAcross - Across(mean)) + up * HingeHeight;
+            var wallFold = new GameObject("Blanket Wall Fold").transform;
+            wallFold.SetParent(hinge, false);
+            wallFold.localPosition = across * (wallCrease - HingeAcross);
+            var grip = new GameObject("Blanket Grip").transform;
+            grip.position = src.TransformPoint(centre + across * (MattressHalfWidth + 0.04f) - along * 0.1f + up * 0.02f);
+            grip.SetParent(src, true);      // SoftBlanket moves it onto the cloth vertex there, every frame
 
             var weights = new BoneWeight[verts.Length];
             var coeffs = new ClothSkinningCoefficient[verts.Length];
             for (int i = 0; i < verts.Length; i++)
             {
-                bool onEdge = Vector3.Dot(verts[i], headLocal) > maxAlong - 0.03f;
-                weights[i] = new BoneWeight { boneIndex0 = onEdge ? 1 : 0, weight0 = 1 };
-                coeffs[i] = new ClothSkinningCoefficient { maxDistance = onEdge ? 0f : 2f, collisionSphereDistance = 0f };
+                float a = Across(verts[i]);
+                int bone = a > wallCrease ? 2 : a > HingeAcross ? 1 : 0;
+                weights[i] = new BoneWeight { boneIndex0 = bone, weight0 = 1 };
+                bool overhang = Mathf.Abs(a) > MattressHalfWidth || Mathf.Abs(Along(verts[i])) > MattressHalfLength;
+                coeffs[i] = new ClothSkinningCoefficient { maxDistance = overhang ? 0.07f : 0.03f, collisionSphereDistance = 0f };
             }
             mesh.boneWeights = weights;
-            mesh.bindposes = new[] { rootBone.worldToLocalMatrix * rootBone.localToWorldMatrix, edge.worldToLocalMatrix * rootBone.localToWorldMatrix };
+            mesh.bindposes = new[]
+            {
+                src.worldToLocalMatrix * src.localToWorldMatrix,
+                hinge.worldToLocalMatrix * src.localToWorldMatrix,
+                wallFold.worldToLocalMatrix * src.localToWorldMatrix,
+            };
             var meshPath = $"{GenDir}/{bed.name} Blanket.asset";
             AssetDatabase.DeleteAsset(meshPath);
             AssetDatabase.CreateAsset(mesh, meshPath);
 
             var material = mr.sharedMaterial;
+            var baseColor = material.HasProperty("_BaseColor") ? material.GetColor("_BaseColor") : new Color(0.42f, 0.55f, 0.75f);
             Object.DestroyImmediate(mr);
             Object.DestroyImmediate(mf);
             var smr = src.gameObject.AddComponent<SkinnedMeshRenderer>();
             smr.sharedMesh = mesh;
-            smr.bones = new[] { rootBone, edge };
-            smr.rootBone = rootBone;
-            var dbl = new Material(Shader.Find("Universal Render Pipeline/Lit"));
-            dbl.SetColor("_BaseColor", material.HasProperty("_BaseColor") ? material.GetColor("_BaseColor") : new Color(0.42f, 0.55f, 0.75f));
-            dbl.SetFloat("_Smoothness", 0.05f);
-            dbl.SetFloat("_Cull", 0f);    // both faces: the blanket folds over
-            SaveMat(dbl, $"{bed.name} Blanket");
-            smr.sharedMaterial = dbl;
-            smr.updateWhenOffscreen = true;
+            smr.bones = new[] { src, hinge, wallFold };
+            smr.rootBone = src;
+            smr.updateWhenOffscreen = true;     // the quilt shell draws it; the cloth must simulate all the same
+            smr.sharedMaterial = material;
 
             var cloth = src.gameObject.AddComponent<Cloth>();
             cloth.coefficients = coeffs;
-            cloth.stretchingStiffness = 0.9f;
-            cloth.bendingStiffness = 0.15f;
-            cloth.damping = 0.25f;
+            // a heavy duvet: it falls and settles rather than floats, and holds a soft shape
+            cloth.stretchingStiffness = 0.95f;
+            cloth.bendingStiffness = 0.3f;
+            cloth.damping = 0.5f;
+            cloth.externalAcceleration = new Vector3(0, -7f, 0);
             cloth.friction = 1f;      // as much as cloth has: a blanket does not slide off a sleeper
             cloth.useGravity = true;
             cloth.worldVelocityScale = 0f;
             cloth.worldAccelerationScale = 0f;
             cloth.clothSolverFrequency = 180;
-            cloth.capsuleColliders = mattress;
 
             var b = src.gameObject.AddComponent<SoftBlanket>();
-            b.edge = edge;
-            // held up and back past the foot end, so the blanket hangs clear of the mattress while someone gets in or out
-            // (the blanket is 2 m long and stretches a little: held 2.9 m up over the feet, it hangs clear above the legs)
-            b.foldedOffset = rootBone.InverseTransformDirection(-headTo) * 1.5f + rootBone.InverseTransformDirection(Vector3.up) * 2.9f;
-            b.overFeet = rootBone.InverseTransformDirection(-headTo) * 1.5f + rootBone.InverseTransformDirection(Vector3.up) * 2.2f;
-            b.coverOffset = rootBone.InverseTransformDirection(-headTo) * 0.18f + rootBone.InverseTransformDirection(Vector3.up) * 0.2f;   // on the upper chest
+            b.hinge = hinge;
+            b.wallFold = wallFold;
+            b.grip = grip;
+            b.axis = Vector3.Cross(across, up).normalized;     // turns the room side up and over toward the wall
+            b.wallAngle = -90f;
+            b.mattressHalf = new Vector2(MattressHalfWidth, MattressHalfLength);
+            b.mattressCentre = centre;
+            b.acrossLocal = across;
+            b.alongLocal = along;
             src.gameObject.layer = MovableLayer;
+
+            // the visible quilt: a thick shell round the cloth, with stitched squares
+            var shellGo = new GameObject("Quilt");
+            shellGo.transform.SetParent(src, false);
+            shellGo.layer = MovableLayer;
+            shellGo.AddComponent<MeshFilter>();
+            var shellR = shellGo.AddComponent<MeshRenderer>();
+            shellR.sharedMaterial = QuiltMaterial(bed.name, baseColor, Cols, Rows);
+            var shell = shellGo.AddComponent<QuiltShell>();
+            shell.cloth = cloth;
+            shell.blanket = b;
+            shell.cols = Cols;
+            shell.rows = Rows;
             return b;
+        }
+
+        /// <summary>a cotton cover with darker stitch lines where the quilt is sewn into squares, and a piped edge</summary>
+        static Material QuiltMaterial(string bedName, Color baseColor, int cols, int rows)
+        {
+            const int size = 512;
+            var tex = new Texture2D(size, size, TextureFormat.RGB24, true);
+            var px = new Color[size * size];
+            var rng = new System.Random(7);
+            var cover = Color.Lerp(baseColor, Color.white, 0.18f);
+            var seam = cover * 0.78f;
+            seam.a = 1;
+            float sq = QuiltShell.Square;
+            for (int y = 0; y < size; y++)
+            for (int x = 0; x < size; x++)
+            {
+                float u = (x + 0.5f) / size, v = (y + 0.5f) / size;
+                float ci = u * (cols - 1), ri = v * (rows - 1);
+                // distance to the nearest stitch line, in pixels
+                float du = Mathf.Abs(ci / sq - Mathf.Round(ci / sq)) * sq / (cols - 1) * size;
+                float dv = Mathf.Abs(ri / sq - Mathf.Round(ri / sq)) * sq / (rows - 1) * size;
+                float line = Mathf.Clamp01(1.6f - Mathf.Min(du, dv));
+                float edge = Mathf.Min(Mathf.Min(u, 1 - u), Mathf.Min(v, 1 - v)) * size;
+                float piping = Mathf.Clamp01(1f - (edge - 6f) / 2f);
+                // a fine weave
+                float weave = 0.97f + 0.03f * (float)rng.NextDouble() + 0.015f * Mathf.Sin(x * 1.7f) * Mathf.Sin(y * 1.9f);
+                var c = Color.Lerp(cover * weave, seam, Mathf.Max(line, piping * 0.8f));
+                c.a = 1;
+                px[y * size + x] = c;
+            }
+            tex.SetPixels(px);
+            tex.Apply(true);
+            var texPath = $"{GenDir}/{bedName} Quilt.png";
+            File.WriteAllBytes(texPath, tex.EncodeToPNG());
+            Object.DestroyImmediate(tex);
+            AssetDatabase.ImportAsset(texPath, ImportAssetOptions.ForceUpdate);
+            var imported = AssetDatabase.LoadAssetAtPath<Texture2D>(texPath);
+
+            var m = new Material(Shader.Find("Universal Render Pipeline/Lit"));
+            m.SetColor("_BaseColor", Color.white);
+            m.SetTexture("_BaseMap", imported);
+            m.SetFloat("_Smoothness", 0.08f);
+            SaveMat(m, $"{bedName} Quilt");
+            return m;
         }
 
         static GameObject MakeDesk(Vector3 at, Transform parent)
@@ -384,7 +500,8 @@ namespace AiWorld.EditorTools
             sc.gripRight.position = top + Vector3.right * 0.15f;
             sc.seat = new GameObject("Seat").transform;
             sc.seat.SetParent(chair.transform, false);
-            sc.seat.SetPositionAndRotation(new Vector3(at.x, 0, at.z), Quaternion.LookRotation(Vector3.forward));
+            // the hips a little in front of the middle of the seat, so the back and the clothes clear the backrest
+            sc.seat.SetPositionAndRotation(new Vector3(at.x, 0, at.z) + Vector3.forward * 0.06f, Quaternion.LookRotation(Vector3.forward));
             return sc;
         }
 

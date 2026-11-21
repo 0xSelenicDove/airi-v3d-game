@@ -94,7 +94,7 @@ AIRI ⇄ MCP（stdio 或 HTTP）⇄ bridge/airi-mcp.mjs ⇄ WebSocket（127.0.0.
 | 路径 | 内容 |
 | --- | --- |
 | `Assets/Scripts/Agents` | `Agent`（需求、一天的循环，以及完成每个动作的流程）、`AvatarRig`（身体：Animator、IK、注视、眨眼、身体碰撞体）、`MockBrain`（决定接下来做什么；LLM 大脑通过 `IBrain` 接入） |
-| `Assets/Scripts/World` | `Hinged`（门和盖子）、`SoftBlanket`（布料被子）、`Interactable` 和 `Affordance`（物品能做什么）、`House`（屋内或屋外、大门）、`GameClock`、`WallCutaway`，以及保存动作所需位置点的各个 `*Parts` 组件 |
+| `Assets/Scripts/World` | `Hinged`（门和盖子）、`SoftBlanket`（布料被子，用铰链掀开）、`QuiltShell`（把布料画成厚厚的绗缝被）、`Interactable` 和 `Affordance`（物品能做什么）、`House`（屋内或屋外、大门）、`GameClock`、`WallCutaway`，以及保存动作所需位置点的各个 `*Parts` 组件 |
 | `Assets/Scripts/Editor` | `SliceSceneBuilder`（生成场景）、`ClipFactory`（生成人形动画片段和 Animator Controller）、`BatchTools`（命令行入口） |
 | `Assets/Art/Props` | 物品模型，由 `tools/blender/build_props.py` 导出 |
 | `Assets/Animations` | `Character.controller`；`Generated/` 里是生成的动画片段；动作捕捉放进 `Mocap/` |
@@ -105,7 +105,7 @@ AIRI ⇄ MCP（stdio 或 HTTP）⇄ bridge/airi-mcp.mjs ⇄ WebSocket（127.0.0.
 
 ### 动作捕捉
 
-`Assets/Animations/Generated` 里的动画片段（站立、走路、坐、打字、躺、吃东西）由 `ClipFactory` 根据人形肌肉数值生成。它们适用于任何 VRM，但只是占位用的。**真正的动作捕捉是画质提升最大的一步：** 把名为 `Idle`、`Walk`、`Sit`、`Type`、`Lie` 或 `Eat` 的人形动画片段（骨骼设为 Humanoid 的 `.fbx`，或 `.anim`）放进 `Assets/Animations/Mocap`，然后运行 **AiWorld ▸ Build Animator**。Mixamo（有 Adobe 账号即可免费使用）和 Unity Asset Store 上都有合适的片段。
+`Assets/Animations/Generated` 里的动画片段（站立、走路、坐、打字、躺、吃东西，以及上床和起床时的过渡姿势）由 `ClipFactory` 根据人形肌肉数值生成。它们适用于任何 VRM，但只是占位用的。**真正的动作捕捉是画质提升最大的一步：** 把名为 `Idle`、`Walk`、`Sit`、`Type`、`Lie` 或 `Eat` 的人形动画片段（骨骼设为 Humanoid 的 `.fbx`，或 `.anim`）放进 `Assets/Animations/Mocap`，然后运行 **AiWorld ▸ Build Animator**。Mixamo（有 Adobe 账号即可免费使用）和 Unity Asset Store 上都有合适的片段。
 
 ### 物品
 

@@ -12,6 +12,8 @@ namespace AiWorld.World
         [Tooltip("lying: position under the hips, facing the foot end")]
         public Transform lie;
         public float mattressTop = 0.52f;
+        [Tooltip("half the mattress's width (x) and length (z), in the bed's space")]
+        public Vector2 mattressHalf = new(0.475f, 1.025f);
         public SoftBlanket blanket;
         public CapsuleCollider[] mattress;
     }
