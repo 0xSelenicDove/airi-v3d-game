@@ -13,6 +13,10 @@ namespace AiWorld.World
     public class QuiltShell : MonoBehaviour
     {
         public Cloth cloth;
+        [Tooltip("while the quilt lies still, the shell is not rebuilt: the cloth's tiny settling moves do not show as a shiver")]
+        public SoftBlanket blanket;
+        [Tooltip("the sheet is a grid of this many columns (across) and rows (along); its uv runs 0..1 over it")]
+        public int cols = 16, rows = 24;
         [Tooltip("how far the top puffs up over the cloth in the middle of a square, and at a stitch line (m)")]
         public float puff = 0.045f, stitch = 0.018f;
         [Tooltip("how far the underside lies under the cloth (m)")]
@@ -20,24 +24,9 @@ namespace AiWorld.World
         /// <summary>grid steps per quilted square along each axis (the cover texture draws its stitch lines here too)</summary>
         public const int Square = 4;
 
-        /// <summary>columns (across, the shorter side) and rows (along) of a sheet made as a grid</summary>
-        public static (int cols, int rows) GridSize(Mesh sheet)
-        {
-            var (across, along) = Axes(sheet);
-            var xs = new HashSet<int>();
-            var ys = new HashSet<int>();
-            foreach (var v in sheet.vertices) { xs.Add(Mathf.RoundToInt(Vector3.Dot(v, across) * 1000)); ys.Add(Mathf.RoundToInt(Vector3.Dot(v, along) * 1000)); }
-            return (xs.Count, ys.Count);
-        }
-
-        static (Vector3 across, Vector3 along) Axes(Mesh sheet)
-        {
-            var b = sheet.bounds;
-            return b.size.z < b.size.x ? (Vector3.forward, Vector3.right) : (Vector3.right, Vector3.forward);
-        }
-
         Mesh mesh;
-        int n, rows, cols;
+        int n;
+        bool built;
         float[] lift;          // per cloth vertex: how far the top stands over it
         int[] rim;             // border vertex loop
         int[] inner;           // for each border vertex, a neighbour inside the sheet (the roll bulges away from it)
@@ -53,21 +42,12 @@ namespace AiWorld.World
             var rest = src.vertices;
             var tris = src.triangles;
 
-            // the sheet is a grid: number its vertices by row and column from where they rest
-            var (across, along) = Axes(src);
-            float minA = float.MaxValue, minL = float.MaxValue, maxA = float.MinValue, maxL = float.MinValue;
-            foreach (var v in rest)
-            {
-                minA = Mathf.Min(minA, Vector3.Dot(v, across)); maxA = Mathf.Max(maxA, Vector3.Dot(v, across));
-                minL = Mathf.Min(minL, Vector3.Dot(v, along)); maxL = Mathf.Max(maxL, Vector3.Dot(v, along));
-            }
-            (cols, rows) = GridSize(src);
+            var srcUv = src.uv;
             lift = new float[n];
-            uv = new Vector2[n * 2 + 0];
+            uv = new Vector2[n * 2];
             for (int i = 0; i < n; i++)
             {
-                float u = (Vector3.Dot(rest[i], across) - minA) / Mathf.Max(maxA - minA, 1e-4f);
-                float w = (Vector3.Dot(rest[i], along) - minL) / Mathf.Max(maxL - minL, 1e-4f);
+                float u = srcUv[i].x, w = srcUv[i].y;
                 float ci = u * (cols - 1), ri = w * (rows - 1);
                 // puffy in the middle of each square, down at the stitch lines; the edges roll down into the rim
                 float sx = Mathf.Abs(Mathf.Sin(Mathf.PI * ci / Square)), sy = Mathf.Abs(Mathf.Sin(Mathf.PI * ri / Square));
@@ -187,6 +167,8 @@ namespace AiWorld.World
             var v = cloth.vertices;
             var nr = cloth.normals;
             if (v.Length != n || nr.Length != n) return;
+            if (built && blanket && blanket.Still) return;
+            built = true;
             Fill(v, nr);
             mesh.vertices = pos;
             mesh.RecalculateNormals();

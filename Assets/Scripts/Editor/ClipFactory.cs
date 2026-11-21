@@ -12,7 +12,7 @@ namespace AiWorld.EditorTools
     /// Makes the humanoid clips and the Animator Controller the characters use.
     ///
     /// Clips are made from humanoid muscle values, so they play on every VRM. They are placeholders for motion
-    /// capture: put a humanoid clip (an .fbx set to Humanoid, or an .anim) named Idle, Walk, Sit, Type, Lie, Eat, SitLean, BedSit or Stoop in
+    /// capture: put a humanoid clip (an .fbx set to Humanoid, or an .anim) named Idle, Walk, Sit, Type, Lie, Eat, SitLean, Stoop, SideDown, SideUp, RollBack or RollSide in
     /// Assets/Animations/Mocap and the controller uses it instead (run AiWorld ▸ Build Animator again).
     ///
     /// Which way a muscle moves (is +1 "thigh forward" or "thigh back"?) is measured on a real avatar here instead of
@@ -46,15 +46,19 @@ namespace AiWorld.EditorTools
                 ["Lie"] = Pick("Lie", MakeLie),
                 ["Eat"] = Pick("Eat", MakeEat),
                 ["SitLean"] = Pick("SitLean", MakeSitLean),
-                ["BedSit"] = Pick("BedSit", MakeBedSit),
                 ["Stoop"] = Pick("Stoop", MakeStoop),
-                ["LieDown"] = Pick("LieDown", () => MakeLieDown(false)),
-                ["SitUp"] = Pick("SitUp", () => MakeLieDown(true)),
+                ["SideDown"] = Pick("SideDown", () => MakeSideDown(false)),
+                ["SideUp"] = Pick("SideUp", () => MakeSideDown(true)),
+                ["RollBack"] = Pick("RollBack", () => MakeRoll(false)),
+                ["RollSide"] = Pick("RollSide", () => MakeRoll(true)),
             };
 
             AssetDatabase.DeleteAsset(ControllerPath);
             var ctrl = AnimatorController.CreateAnimatorControllerAtPath(ControllerPath);
             ctrl.AddParameter("Speed", AnimatorControllerParameterType.Float);
+            // the bed clips are made for a bed whose room side is on the left of someone lying in it; the other way
+            // round they play mirrored
+            ctrl.AddParameter("Mirror", AnimatorControllerParameterType.Bool);
             var layers = ctrl.layers;
             layers[0].iKPass = true;
             ctrl.layers = layers;
@@ -68,8 +72,16 @@ namespace AiWorld.EditorTools
             loco.motion = tree;
             loco.iKOnFeet = false;
             sm.defaultState = loco;
-            foreach (var name in new[] { "Sit", "Type", "Lie", "Eat", "SitLean", "BedSit", "Stoop", "LieDown", "SitUp" })
-                sm.AddState(name).motion = clips[name];
+            foreach (var name in new[] { "Sit", "Type", "Lie", "Eat", "SitLean", "Stoop", "SideDown", "SideUp", "RollBack", "RollSide" })
+            {
+                var st = sm.AddState(name);
+                st.motion = clips[name];
+                if (name.StartsWith("Side") || name.StartsWith("Roll"))
+                {
+                    st.mirrorParameterActive = true;
+                    st.mirrorParameter = "Mirror";
+                }
+            }
             AssetDatabase.SaveAssets();
             Debug.Log($"[ClipFactory] wrote {ControllerPath}");
             return ctrl;
@@ -145,7 +157,6 @@ namespace AiWorld.EditorTools
                 sign["ShoulderUp"] = Test("Left Shoulder Down-Up", () => P(HumanBodyBones.LeftHand).y);
                 armDown = SolveArmDown(handler, anim);
                 thighLevel = SolveThighLevel(handler, anim);
-                thighByTilt = SolveThighByTilt(handler, anim, 8);
                 Debug.Log("[ClipFactory] muscle signs: " + string.Join(", ", sign.Select(kv => $"{kv.Key}={kv.Value:+0;-0}")));
                 Debug.Log($"[ClipFactory] arms down: arm {armDown:0.00} with shoulder {ShoulderDown:0.00}; thighs level: {thighLevel:0.00}");
                 Debug.Log($"[ClipFactory] rest body {restBody}");
@@ -204,39 +215,6 @@ namespace AiWorld.EditorTools
                 if (err < bestErr - 0.01f) { bestErr = err; best = u; }
             }
             return best;
-        }
-
-        /// <summary>the thigh units that keep the thighs level at each step of lying back (0 = sitting up .. 1 = lying)</summary>
-        static float[] thighByTilt = { 1f, 0.06f };
-
-        static float[] SolveThighByTilt(HumanPoseHandler handler, Animator anim, int steps)
-        {
-            var up = anim.GetBoneTransform(HumanBodyBones.LeftUpperLeg);
-            var low = anim.GetBoneTransform(HumanBodyBones.LeftLowerLeg);
-            var result = new float[steps + 1];
-            var from = Pose.LongSit();
-            var to = Pose.Lying();
-            for (int i = 0; i <= steps; i++)
-            {
-                float k = i / (float)steps;
-                float best = 0f, bestErr = float.MaxValue;
-                for (float u = -0.5f; u <= 2.5f; u += 0.02f)
-                {
-                    var p = Pose.Lerp(from, to, k);
-                    p.rot = Quaternion.AngleAxis(-90f * k, Vector3.right);
-                    p.Thigh("Left", u).Thigh("Right", u);
-                    var hp = new HumanPose { bodyPosition = p.body, bodyRotation = p.rot, muscles = p.m };
-                    handler.SetHumanPose(ref hp);
-                    var d = (low.position - up.position).normalized;
-                    // level, a hair up, and pointing forward (not folded back)
-                    float elevation = Mathf.Asin(Mathf.Clamp(d.y, -1f, 1f)) * Mathf.Rad2Deg;
-                    float err = Mathf.Abs(elevation - 3f) + (d.z < 0 ? 180f : 0f);
-                    if (err < bestErr - 0.01f) { bestErr = err; best = u; }
-                }
-                result[i] = best;
-            }
-            Debug.Log("[ClipFactory] thighs by tilt: " + string.Join(" ", result.Select(x => x.ToString("0.00"))));
-            return result;
         }
 
         static float TestKnee(HumanPoseHandler handler, Animator anim)
@@ -332,6 +310,56 @@ namespace AiWorld.EditorTools
                 return p;
             }
 
+            /// <summary>
+            /// lying on the left side along the bed, facing the room (the root's -x, its left) with the head toward the
+            /// head end (the root's -z): knees a little drawn up, the lower arm before the face, the upper hand on the bed
+            /// </summary>
+            public static Pose SideLying()
+            {
+                var p = Standing();
+                p.Thigh("Left", 0.4f).Knee("Left", 0.45f).Foot("Left", -0.2f);
+                p.Thigh("Right", 0.5f).Knee("Right", 0.55f).Foot("Right", -0.2f);
+                p.Spine(0.08f);
+                p.Head(0.12f);
+                p.Arm("Left", 0.45f, 0.75f).Elbow("Left", 0.9f);
+                p.Arm("Right", 0.05f, 0.45f).Elbow("Right", 0.35f);
+                p.rot = Quaternion.LookRotation(Vector3.left, Vector3.back);
+                return p;
+            }
+
+            /// <summary>sitting on the bed's edge, facing the room (the root's -x), in the frame of someone lying in the bed</summary>
+            public static Pose SeatedFacingRoom()
+            {
+                var p = Seated();
+                p.rot = Quaternion.LookRotation(Vector3.left, Vector3.up);
+                return p;
+            }
+
+            /// <summary>
+            /// half way down onto the side: the weight going onto the lower (left) elbow toward the head end, the upper
+            /// hand pushing on the bed in front, the back straight
+            /// </summary>
+            public static Pose SideSupport()
+            {
+                var p = SeatedFacingRoom();
+                p.Spine(0.12f);
+                p.Arm("Left", 0.6f, 0.2f).Elbow("Left", 0.75f);
+                p.Arm("Right", 0.3f, 0.7f).Elbow("Right", 0.3f);
+                p.Head(-0.05f);
+                return p;
+            }
+
+            /// <summary>this pose's legs (hips, knees, feet, toes) taken from another pose</summary>
+            public Pose LegsFrom(Pose other)
+            {
+                for (int i = 0; i < m.Length; i++)
+                {
+                    var n = HumanTrait.MuscleName[i];
+                    if (n.Contains(" Leg ") || n.Contains("Foot") || n.Contains("Toes")) m[i] = other.m[i];
+                }
+                return this;
+            }
+
             /// <summary>between two poses: muscles and the body position blend, the body turns</summary>
             public static Pose Lerp(Pose a, Pose b, float t)
             {
@@ -342,7 +370,7 @@ namespace AiWorld.EditorTools
                 return p;
             }
 
-            /// <summary>sitting on a bed with the legs straight out on the mattress, the hands beside the hips</summary>
+            /// <summary>sitting up with the legs straight out (used to measure the units that hold the thighs level)</summary>
             public static Pose LongSit()
             {
                 var p = Standing();
@@ -506,22 +534,6 @@ namespace AiWorld.EditorTools
             return t.Clip(true);
         }
 
-        /// <summary>sitting on a bed with the legs out along it: between sitting on the edge and lying down</summary>
-        static AnimationClip MakeBedSit()
-        {
-            var t = new Track();
-            const int N = 6;
-            for (int i = 0; i <= N; i++)
-            {
-                float ph = i / (float)N * Mathf.PI * 2f;
-                var p = Pose.LongSit();
-                p.Spine(0.1f + 0.02f * Mathf.Sin(ph * 2f));
-                p.Set("Head Turn Left-Right", 0.05f * Mathf.Sin(ph));
-                t.Key(i / (float)N * 6f, p);
-            }
-            return t.Clip(true);
-        }
-
         /// <summary>bending over a bed to take the blanket: back bent, knees soft, one arm free for the hand IK</summary>
         static AnimationClip MakeStoop()
         {
@@ -578,25 +590,50 @@ namespace AiWorld.EditorTools
         }
 
         /// <summary>
-        /// from sitting with the legs out along the bed to lying on the back (or back up, reversed). A cross-fade between
-        /// the two would let the legs sag into the mattress half way (the thigh muscle does not move in step with the
-        /// body's turn), so each key holds the thighs level for the tilt it is at (see <see cref="SolveThighLevel"/>).
+        /// Getting into bed the way people are taught to (the "log roll"): from sitting on the edge, the arms lower the
+        /// upper body onto its side while the legs rise onto the bed in line with it. The trunk tips over first (the
+        /// shins come up level as it goes, still off the edge), the knees tuck a little, then the legs swing in over the
+        /// mattress. Reversed, it is getting up: push up with the arms while the legs go down to the floor.
+        /// The clip is in the frame of someone lying in the bed: the root faces the foot end, the room is on its left.
         /// </summary>
-        static AnimationClip MakeLieDown(bool reverse)
+        static AnimationClip MakeSideDown(bool reverse)
         {
-            const float T = 1.6f;
+            const float T = 2.6f;
+            const int N = 14;
+            var start = Pose.SeatedFacingRoom();
+            var support = Pose.SideSupport();
+            var end = Pose.SideLying();
             var t = new Track();
-            var from = Pose.LongSit();
-            var to = Pose.Lying();
-            int n = thighByTilt.Length - 1;
-            for (int i = 0; i <= n; i++)
+            for (int i = 0; i <= N; i++)
             {
-                float k = i / (float)n;
-                var p = Pose.Lerp(from, to, k);
-                p.rot = Quaternion.AngleAxis(-90f * k, Vector3.right);
-                foreach (var side in new[] { "Left", "Right" }) p.Thigh(side, thighByTilt[i]);
-                float time = (reverse ? 1f - k : k) * T;
-                t.Key(time, p);
+                float k = i / (float)N;
+                float tip = Mathf.SmoothStep(0, 1, Mathf.Clamp01(k / 0.6f));
+                float legs = Mathf.SmoothStep(0, 1, Mathf.Clamp01((k - 0.45f) / 0.55f));
+                var upper = k < 0.45f ? Pose.Lerp(start, support, Mathf.SmoothStep(0, 1, k / 0.45f))
+                                      : Pose.Lerp(support, end, Mathf.SmoothStep(0, 1, (k - 0.45f) / 0.55f));
+                var p = upper.LegsFrom(Pose.Lerp(start, end, legs));
+                // the knees tuck up a little while the legs come round, so the feet stay up off the edge
+                float tuck = 0.2f * Mathf.Sin(Mathf.PI * Mathf.Clamp01((k - 0.2f) / 0.75f));
+                foreach (var side in new[] { "Left", "Right" }) p.Knee(side, Mathf.Lerp(1.0f, side == "Left" ? 0.45f : 0.55f, legs) + tuck);
+                p.rot = Quaternion.Slerp(start.rot, end.rot, tip);
+                t.Key((reverse ? 1f - k : k) * T, p);
+            }
+            return t.Clip(false);
+        }
+
+        /// <summary>from lying on the side, facing the room, onto the back (or back again, reversed)</summary>
+        static AnimationClip MakeRoll(bool reverse)
+        {
+            const float T = 1.4f;
+            const int N = 8;
+            var side = Pose.SideLying();
+            var back = Pose.Lying();
+            var t = new Track();
+            for (int i = 0; i <= N; i++)
+            {
+                float k = Mathf.SmoothStep(0, 1, i / (float)N);
+                var p = Pose.Lerp(side, back, k);
+                t.Key((reverse ? 1f - i / (float)N : i / (float)N) * T, p);
             }
             return t.Clip(false);
         }

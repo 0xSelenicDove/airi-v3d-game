@@ -12,8 +12,8 @@ namespace AiWorld.Agents
     ///
     ///  R0  nothing passes through anything else: walking is on the NavMesh, doors and lids are rigid bodies, and
     ///      the body has colliders;
-    ///  R2  to lie down, walk to the side of the bed, turn the quilt back, sit on its edge, lift the legs onto the
-    ///      bed, lie down and pull the quilt over; get up the same way in reverse;
+    ///  R2  to lie down, walk to the side of the bed, turn the quilt back, sit on its edge, lower the body onto its
+    ///      side as the legs come up onto the bed, roll onto the back and pull the quilt over; get up in reverse;
     ///  R3  to pass the door, take its handle, walk with it as it swings, go round it, and close it from the other side;
     ///  R4  when the way is blocked, stop and think, try another way, and give up after a few tries.
     /// </summary>
@@ -244,14 +244,17 @@ namespace AiWorld.Agents
         {
             Vector3 p0 = transform.position;
             var r0 = transform.rotation;
+            // keep the height the body has (the NavMesh's): the hips are lowered onto seats by the rig, and a body
+            // moved to the floor's height would jump back up to the NavMesh when it walks again
+            var p1 = new Vector3(to.position.x, p0.y, to.position.z);
             for (float t = 0; t < seconds; t += Time.deltaTime)
             {
                 float k = Mathf.SmoothStep(0, 1, t / seconds);
-                transform.position = Vector3.Lerp(p0, to.position, k);
+                transform.position = Vector3.Lerp(p0, p1, k);
                 transform.rotation = Quaternion.Slerp(r0, to.rotation, k);
                 yield return null;
             }
-            transform.SetPositionAndRotation(to.position, to.rotation);
+            transform.SetPositionAndRotation(p1, to.rotation);
         }
 
         /// <summary>
@@ -328,6 +331,10 @@ namespace AiWorld.Agents
             yield return WalkTo(bed.side.position);
             if (!ok) yield break;
             Manual(true);
+            float top = bed.mattressTop;
+            var lieRot = bed.lie.rotation;
+            // where the hips are while lying on the side, facing the room: a little toward the room from lying on the back
+            var onSide = bed.lie.position + bed.side.forward * 0.14f;
 
             // bend over the bed, take the quilt by its edge and turn it back onto the half by the wall
             Doing = "turning the quilt back";
@@ -337,31 +344,38 @@ namespace AiWorld.Agents
             Doing = "getting into bed";
             yield return TurnTo(bed.sit.forward, 0.6f);
             nav.enabled = false;
-            rig.Play(AvatarRig.Sit, 0.9f);
-            rig.HoldHipsAt(bed.mattressTop + 0.06f);
-            rig.PlantFeet(bed.sit.position, bed.sit.forward);
-            yield return Glide(bed.sit, 0.9f);
-            yield return new WaitForSeconds(0.4f);
+            rig.FitOnto(bed.transform, bed.mattressHalf, top);
+            // the feet stay where they stand while the hips go back and down onto the edge
+            rig.PlantFeetHere(bed.sit.forward);
+            rig.Play(AvatarRig.Sit, 1.0f);
+            yield return SitBackOnto(bed.sit, 1.1f, top + 0.06f);
+            yield return new WaitForSeconds(0.5f);
 
-            // lift the legs straight out (clear of the mattress), then turn on the seat so they swing over the bed
+            // lie down the way people are taught to (the log roll): the arms lower the upper body onto its side while
+            // the legs rise onto the bed. The clip is made facing the foot end, so the root turns to face it now; the
+            // clip's first pose is sitting facing the room, so the body does not move when it does.
+            rig.SetMirror(!RoomOnLeft(bed));
+            transform.rotation = lieRot;
+            rig.PlayNow(AvatarRig.SideDown);
             rig.PlantFeet(null);
-            rig.Play(AvatarRig.BedSit, 0.8f);
-            rig.HoldHipsAt(bed.mattressTop + 0.1f);
-            yield return new WaitForSeconds(0.85f);
-            yield return Glide(bed.swing, 1.1f);
-            yield return new WaitForSeconds(0.2f);
+            yield return LogRoll(bed.sit.position, onSide, lieRot, 2.6f, down: true);
+            yield return new WaitForSeconds(0.25f);
 
-            // lie back, the head to the pillow, the legs staying on the mattress
-            rig.Play(AvatarRig.LieDown, 0.25f);
-            yield return Glide(bed.lie, 1.6f);
+            // roll onto the back
+            rig.Play(AvatarRig.RollBack, 0.2f);
+            yield return Move(bed.lie.position, lieRot, 1.4f, top + 0.16f, top + 0.1f);
             rig.Play(AvatarRig.Lie, 0.5f);
             yield return new WaitForSeconds(0.4f);
 
-            // and pull the quilt back over: it lands on the body from above (the body is a cloth collider)
-            bed.blanket.SetBodyColliders(rig.ClothCapsules, bed.mattress);
+            // reach for the quilt's edge and pull it over: it lands on the body from above (the body is a cloth
+            // collider, grown in gently so the folded quilt beside the body is eased aside, not knocked)
             rig.FitClothCapsules();
+            rig.FadeClothCapsules(0f, 0f);
+            bed.blanket.SetBodyColliders(rig.ClothCapsules, bed.mattress);
+            rig.FadeClothCapsules(1f, 0.4f);
+            yield return new WaitForSeconds(0.45f);
             bed.blanket.Sleeper(true, rig.ClothCapsules);
-            bed.blanket.Fold(0f);
+            yield return HandOnQuilt(bed, 0f, 0.3f);
             while (bed.blanket.Folded > 0.02f) yield return null;
             Asleep = true;
             // sleep through the night: once the time is up, sleep on until morning (unless asked to get up)
@@ -369,28 +383,137 @@ namespace AiWorld.Agents
             while (!cutShort && IsNight()) yield return null;   // still sleeping (and resting): Doing stays "sleep"
             Asleep = false;
 
-            // getting up is the same in reverse: the quilt back, sit up, swing the legs down, stand
+            // getting up is the same in reverse: throw the quilt back, roll onto the side facing the room, push up
+            // with the arms while the legs go down to the floor, and stand
             Doing = "getting up";
-            bed.blanket.Fold(1f);
+            yield return HandOnQuilt(bed, 1f, 0.45f);
             while (bed.blanket.Folded < 0.98f) yield return null;
-            rig.Play(AvatarRig.SitUp, 0.3f);
-            yield return Glide(bed.swing, 1.6f);
-            rig.Play(AvatarRig.BedSit, 0.4f);
-            bed.blanket.SetBodyColliders(null, bed.mattress);
-            rig.UnfitClothCapsules();
+            // the quilt is off: shrink the body away from the cloth (it lets go of the quilt once the bed is made)
+            rig.FadeClothCapsules(0f, 0.5f);
+            yield return new WaitForSeconds(0.55f);
             bed.blanket.Sleeper(false);
+            rig.Play(AvatarRig.RollSide, 0.25f);
+            yield return Move(onSide, lieRot, 1.4f, top + 0.1f, top + 0.16f);
             yield return new WaitForSeconds(0.2f);
-            yield return Glide(bed.sit, 1.1f);
-            rig.Play(AvatarRig.Sit, 0.8f);
-            rig.HoldHipsAt(bed.mattressTop + 0.06f);
+            rig.Play(AvatarRig.SideUp, 0.15f);
+            yield return LogRoll(bed.sit.position, onSide, lieRot, 2.6f, down: false);
+            // sitting on the edge facing the room again: the root turns back under the body
+            transform.rotation = bed.sit.rotation;
+            rig.PlayNow(AvatarRig.Sit);
             rig.PlantFeet(bed.sit.position, bed.sit.forward);
-            yield return new WaitForSeconds(0.9f);
+            yield return new WaitForSeconds(0.8f);
             yield return StandUp(bed.side, rejoinNav: false);
+            rig.FitOff();
 
             // make the bed: lay the quilt back over it
             Doing = "making the bed";
             yield return TurnBlanket(bed, 0f);
+            // (the shrunk body capsules leave the quilt only now that it lies flat, so nothing in it springs back)
+            bed.blanket.SetBodyColliders(null, bed.mattress);
+            rig.UnfitClothCapsules();
+            rig.FadeClothCapsules(1f, 0f);
             Manual(false);
+        }
+
+        /// <summary>is the room on the left of someone lying in this bed? (the bed clips are made that way round)</summary>
+        static bool RoomOnLeft(BedParts bed) => Vector3.Dot(bed.side.forward, -bed.lie.right) > 0f;
+
+        /// <summary>
+        /// lying in bed: take the quilt's edge with the nearer hand and pull it over (to 0) or throw it back (to 1); the
+        /// hand goes with the edge until the quilt is <paramref name="letGoAt"/> of the way, then its weight carries it on
+        /// </summary>
+        IEnumerator HandOnQuilt(BedParts bed, float to, float letGoAt)
+        {
+            var grip = bed.blanket.grip;
+            var anim = rig.Animator;
+            var l = anim.GetBoneTransform(HumanBodyBones.LeftUpperArm);
+            var r = anim.GetBoneTransform(HumanBodyBones.RightUpperArm);
+            var hand = l && r && (grip.position - l.position).sqrMagnitude < (grip.position - r.position).sqrMagnitude
+                ? AvatarIKGoal.LeftHand : AvatarIKGoal.RightHand;
+            rig.ClothArm(hand, false);
+            rig.Reach(hand, grip);
+            rig.LookAt(grip.position);
+            float wait = 0;
+            while (!rig.HandArrived(hand) && (wait += Time.deltaTime) < 0.9f) yield return null;
+            bed.blanket.Fold(to);
+            float from = bed.blanket.Folded;
+            while (Mathf.Abs(bed.blanket.Folded - from) < Mathf.Abs(to - from) * letGoAt)
+            {
+                rig.LookAt(grip.position);
+                yield return null;
+            }
+            rig.LetGo(hand);
+            rig.LookAt(null);
+            // the arm lies under the quilt again once the quilt has landed
+            while (Mathf.Abs(bed.blanket.Folded - to) > 0.02f) yield return null;
+            rig.ClothArm(hand, true);
+        }
+
+        /// <summary>
+        /// the body's path while the SideDown (or, reversed, SideUp) clip plays: the hips stay over the edge while the
+        /// trunk tips onto its side (they only rise as it tips: the lower hip goes down as the trunk goes over), and
+        /// they move in toward the middle of the bed as the legs come up (moving in earlier would drag the hanging
+        /// legs into the mattress)
+        /// </summary>
+        IEnumerator LogRoll(Vector3 sitting, Vector3 onSide, Quaternion facing, float seconds, bool down)
+        {
+            float top = 0;
+            if (using_ && using_.TryGetComponent(out BedParts bed)) top = bed.mattressTop;
+            float y = transform.position.y;
+            for (float t = 0; ; t += Time.deltaTime)
+            {
+                float k = Mathf.Clamp01(t / seconds);
+                float kd = down ? k : 1f - k;     // where the clip is, as if lying down
+                float tip = Mathf.SmoothStep(0, 1, Mathf.Clamp01(kd / 0.6f));
+                float inward = Mathf.SmoothStep(0, 1, Mathf.Clamp01((kd - 0.35f) / 0.65f));
+                var p = Vector3.Lerp(sitting, onSide, inward);
+                transform.SetPositionAndRotation(new Vector3(p.x, y, p.z), facing);
+                // sitting: the hips 6 cm over the mattress; on the side: 16 cm (half the pelvis); on the way, higher still
+                rig.HoldHipsAt(top + Mathf.Lerp(0.06f, 0.16f, tip) + 0.09f * Mathf.Sin(Mathf.PI * tip));
+                if (k >= 1f) break;
+                yield return null;
+            }
+        }
+
+        /// <summary>
+        /// sit down onto something behind: the hips go back first and come down as they get over it, so the seat
+        /// never catches its edge on the way
+        /// </summary>
+        IEnumerator SitBackOnto(Transform seat, float seconds, float hipsTo)
+        {
+            var hipsBone = rig.Animator.GetBoneTransform(HumanBodyBones.Hips);
+            float hipsFrom = hipsBone ? hipsBone.position.y : hipsTo + 0.35f;
+            Vector3 p0 = transform.position;
+            var r0 = transform.rotation;
+            var p1 = new Vector3(seat.position.x, p0.y, seat.position.z);
+            for (float t = 0; t < seconds; t += Time.deltaTime)
+            {
+                float k = t / seconds;
+                float back = Mathf.SmoothStep(0, 1, Mathf.Clamp01(k / 0.8f));
+                float down = Mathf.SmoothStep(0, 1, Mathf.Clamp01((k - 0.25f) / 0.75f));
+                transform.SetPositionAndRotation(Vector3.Lerp(p0, p1, back), Quaternion.Slerp(r0, seat.rotation, back));
+                rig.HoldHipsAt(Mathf.Lerp(hipsFrom, hipsTo, down));
+                yield return null;
+            }
+            transform.SetPositionAndRotation(p1, seat.rotation);
+            rig.HoldHipsAt(hipsTo);
+        }
+
+        /// <summary>move the body over the bed (its height stays the NavMesh's) and lower or raise the hips with it</summary>
+        IEnumerator Move(Vector3 to, Quaternion facing, float seconds, float hipsFrom, float hipsTo)
+        {
+            Vector3 p0 = transform.position;
+            var r0 = transform.rotation;
+            var p1 = new Vector3(to.x, p0.y, to.z);
+            for (float t = 0; t < seconds; t += Time.deltaTime)
+            {
+                float k = Mathf.SmoothStep(0, 1, t / seconds);
+                transform.SetPositionAndRotation(Vector3.Lerp(p0, p1, k), Quaternion.Slerp(r0, facing, k));
+                rig.HoldHipsAt(Mathf.Lerp(hipsFrom, hipsTo, k));
+                yield return null;
+            }
+            transform.SetPositionAndRotation(p1, facing);
+            rig.HoldHipsAt(hipsTo);
         }
 
         /// <summary>standing beside the bed: bend over, take the quilt's edge, and turn it back (1) or lay it over (0)</summary>

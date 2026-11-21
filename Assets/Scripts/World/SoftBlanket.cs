@@ -38,12 +38,14 @@ namespace AiWorld.World
         public float seconds = 1.6f;
 
         [Header("How far vertices may move from the skinned pose (m)")]
-        public float settled = 0.1f;
+        public float settled = 0.03f;
         public float turning = 0.16f;
+        [Tooltip("folded back, how far the part against the wall may slump from standing upright (m): it is heavy")]
+        public float slump = 0.22f;
         [Tooltip("over a sleeper, how much higher than the body under it a vertex may rise (m)")]
         public float overBody = 0.07f;
         [Tooltip("for vertices past the mattress (the overhang): this much more, so it hangs down the side")]
-        public float overhangExtra = 0.25f;
+        public float overhangExtra = 0.04f;
         [Tooltip("metres per second at which a limit tightens (it loosens at once)")]
         public float tighten = 0.3f;
         [Tooltip("which vertices are over the mattress: half size (x across, y along) and centre, in the blanket's space")]
@@ -51,14 +53,18 @@ namespace AiWorld.World
         public Vector3 mattressCentre;
         public Vector3 acrossLocal = Vector3.right, alongLocal = Vector3.forward;
 
-        float fold, foldTarget;
+        float fold, foldTarget, lastChange;
         Vector3 hingeRest;
         float raise;
         bool sleeper;
         Cloth cloth;
-        bool[] isOverhang;
+        bool[] isOverhang, isWallPart;
+        int gripVertex = -1;
         float[] limit, sleeperLimit;
         ClothSkinningCoefficient[] coeffs;
+
+        /// <summary>nothing has moved it for a while: it lies still (its drawn shape need not follow the cloth's settling)</summary>
+        public bool Still => Time.time - lastChange > 1.5f;
 
         /// <summary>0 = covering the bed, 1 = turned back to the wall</summary>
         public float Folded => fold;
@@ -69,6 +75,9 @@ namespace AiWorld.World
             if (hinge) hingeRest = hinge.localPosition;
             coeffs = cloth.coefficients;
             isOverhang = new bool[coeffs.Length];
+            isWallPart = new bool[coeffs.Length];
+            var weights = GetComponent<SkinnedMeshRenderer>().sharedMesh.boneWeights;
+            for (int i = 0; i < isWallPart.Length && i < weights.Length; i++) isWallPart[i] = weights[i].boneIndex0 == 2;
             limit = new float[coeffs.Length];
             sleeperLimit = new float[coeffs.Length];
             var verts = GetComponent<SkinnedMeshRenderer>().sharedMesh.vertices;
@@ -77,6 +86,17 @@ namespace AiWorld.World
                 var d = verts[i] - mattressCentre;
                 isOverhang[i] = Mathf.Abs(Vector3.Dot(d, acrossLocal)) > mattressHalf.x || Mathf.Abs(Vector3.Dot(d, alongLocal)) > mattressHalf.y;
                 limit[i] = coeffs[i].maxDistance;
+            }
+            // the hand takes the quilt where its edge really is (it sags and slumps), not where it would be
+            if (grip)
+            {
+                var g = transform.InverseTransformPoint(grip.position);
+                float best = float.MaxValue;
+                for (int i = 0; i < verts.Length; i++)
+                {
+                    float d = (verts[i] - g).sqrMagnitude;
+                    if (d < best) { best = d; gripVertex = i; }
+                }
             }
         }
 
@@ -91,6 +111,7 @@ namespace AiWorld.World
         public void Sleeper(bool on, CapsuleCollider[] body = null)
         {
             sleeper = on;
+            lastChange = Time.time;
             if (!on || body == null) return;
             var verts = GetComponent<SkinnedMeshRenderer>().sharedMesh.vertices;
             for (int i = 0; i < verts.Length; i++)
@@ -109,8 +130,10 @@ namespace AiWorld.World
                     float t = ab.sqrMagnitude > 1e-6f ? Mathf.Clamp01(Vector2.Dot(av, ab) / ab.sqrMagnitude) : 0f;
                     var p = Vector3.Lerp(a, b, t);
                     float d = new Vector2(w.x - p.x, w.z - p.z).magnitude;
-                    if (d >= c.radius) continue;
-                    top = Mathf.Max(top, p.y + Mathf.Sqrt(c.radius * c.radius - d * d) - w.y);
+                    // over the body: its top; beside it: a slope down from its side, so the quilt drapes off the
+                    // body in a ramp instead of being held flat right up against it
+                    float h = d < c.radius ? Mathf.Sqrt(c.radius * c.radius - d * d) : -(d - c.radius);
+                    top = Mathf.Max(top, p.y + h - w.y);
                 }
                 sleeperLimit[i] = Mathf.Max(settled, top + overBody);
             }
@@ -119,6 +142,7 @@ namespace AiWorld.World
         /// <summary>make the cloth collide with these (a sleeper's body) as well as the mattress; pass null to clear</summary>
         public void SetBodyColliders(CapsuleCollider[] body, CapsuleCollider[] mattress)
         {
+            lastChange = Time.time;
             int n = (body?.Length ?? 0) + (mattress?.Length ?? 0);
             var all = new CapsuleCollider[n];
             int i = 0;
@@ -130,10 +154,13 @@ namespace AiWorld.World
         void Update()
         {
             if (!hinge) return;
-            fold = Mathf.MoveTowards(fold, foldTarget, Time.deltaTime / Mathf.Max(seconds, 0.01f));
+            // over a sleeper it goes slower: it is lifted off (or laid over) a body, not flung across an empty bed
+            fold = Mathf.MoveTowards(fold, foldTarget, Time.deltaTime / Mathf.Max(sleeper ? seconds * 1.4f : seconds, 0.01f));
             // the near half turns over first; the wall part goes up the wall as it lands (and comes down first)
-            float main = Mathf.SmoothStep(0, 1, Mathf.Clamp01(fold / 0.75f));
-            float wall = Mathf.SmoothStep(0, 1, Mathf.Clamp01((fold - 0.6f) / 0.4f));
+            float main = Mathf.SmoothStep(0, 1, fold);
+            // the outer part turns over with the half until it stands upright, then stays upright while the half
+            // goes on over: it never swings out over the wall-side edge (the bed stands against the wall)
+            float wall = Mathf.Clamp01(2f * main - 1f);
             hinge.localRotation = Quaternion.AngleAxis(180f * main, axis);
             // the turn line itself lifts while the quilt is up, like a pair of hands shaking it out over the bed
             // over a sleeper the near half ends up held above the body, not flat on the mattress through it, and
@@ -147,15 +174,28 @@ namespace AiWorld.World
             UpdateLimits();
         }
 
+        void LateUpdate()
+        {
+            if (!grip || gripVertex < 0) return;
+            var v = cloth.vertices;
+            if (gripVertex < v.Length) grip.position = transform.TransformPoint(v[gripVertex]);
+        }
+
         void UpdateLimits()
         {
             bool moving = !Mathf.Approximately(fold, foldTarget);
+            if (moving) lastChange = Time.time;
             bool changed = false;
             for (int i = 0; i < limit.Length; i++)
             {
                 // while it turns it keeps close to its arc (over a sleeper too, or it would fall behind the body and
                 // stay there); once over a sleeper it is let go and drops onto them
-                float want = moving ? turning : sleeper ? sleeperLimit[i] : settled;
+                // (the sleeper's limits fit the quilt lying over the body: folded back, it is held close again)
+                // (while turning, it sags most in the middle of the arc and comes in to land close to its pose, so it
+                // does not drop into the mattress as it lands)
+                float swing = Mathf.Sin(Mathf.PI * Mathf.SmoothStep(0, 1, fold));
+                float want = moving ? Mathf.Lerp(settled, turning, swing) : sleeper && fold < 0.02f ? sleeperLimit[i] : settled;
+                if (!moving && fold > 0.98f && isWallPart[i]) want += slump;
                 if (isOverhang[i]) want += overhangExtra;
                 float now = limit[i];
                 float next = want > now ? want : Mathf.MoveTowards(now, want, tighten * Time.deltaTime);
