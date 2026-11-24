@@ -87,7 +87,7 @@ AIRI ⇄ MCP（stdio 或 HTTP）⇄ bridge/airi-mcp.mjs ⇄ WebSocket（127.0.0.
 - AIRI 连接期间，Airi 会等待 AIRI 的下一个行动。如果 60 秒内没有给出行动，就由 Airi 自己的大脑决定这一件事（自动驾驶），AIRI 会收到 `autopilot` 事件。AIRI 断开后，Airi 会回到自己的大脑。
 - `AiriLink` 会在场景开始时自动加入（[`Assets/Scripts/Airi`](Assets/Scripts/Airi)）。可以在组件上设置地址和自动驾驶时间；打包的版本也可以用 `-airi-bridge ws://127.0.0.1:<端口>` 和 `-airi-autopilot <秒>` 启动。
 - 桥接只监听 127.0.0.1。它接受游戏（游戏不发送 `Origin` 头），网页只接受来自本机的。
-- Unity 版还没有动作、表情和语音，所以 `act` 没有 `gesture` 类型。
+- Airi 站立不动且[实时动作服务](tools/ardy/README.md)运行时，`act` 可以播放 `gesture`。`interact` 加上 `run: true` 时，她会跑过去。Unity 版还没有表情和语音。
 
 ## 项目结构
 
@@ -106,6 +106,8 @@ AIRI ⇄ MCP（stdio 或 HTTP）⇄ bridge/airi-mcp.mjs ⇄ WebSocket（127.0.0.
 ### 动作捕捉
 
 `Assets/Animations/Generated` 里的动画片段（站立、走路、坐、打字、躺、吃东西，以及上床和起床时的过渡姿势）由 `ClipFactory` 根据人形肌肉数值生成。它们适用于任何 VRM，但只是占位用的。**真正的动作捕捉是画质提升最大的一步：** 把名为 `Idle`、`Walk`、`Sit`、`Type`、`Lie` 或 `Eat` 的人形动画片段（骨骼设为 Humanoid 的 `.fbx`，或 `.anim`）放进 `Assets/Animations/Mocap`，然后运行 **AiWorld ▸ Build Animator**。Mixamo（有 Adobe 账号即可免费使用）和 Unity Asset Store 上都有合适的片段。
+
+在床上躺下和坐起使用 [CMU Graphics Lab 动作捕捉数据库](https://mocap.cs.cmu.edu/) 的动捕数据（subject 111，trial 12）。The data used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding from NSF EIA-0196217. 要重新生成这些片段，把 `111.asf` 和 `111_12.amc` 放进一个文件夹，然后运行 **AiWorld ▸ Import CMU Bed Clips**。
 
 ### 物品
 

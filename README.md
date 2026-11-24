@@ -87,7 +87,7 @@ AIRI ⇄ MCP (stdio or HTTP) ⇄ bridge/airi-mcp.mjs ⇄ WebSocket (127.0.0.1:87
 - While AIRI is connected, Airi waits for AIRI's next action. When AIRI gives no action for 60 s, Airi's own brain decides that one thing (autopilot), and AIRI gets an `autopilot` event. When AIRI disconnects, Airi goes back to her own brain.
 - `AiriLink` adds itself when the scene starts ([`Assets/Scripts/Airi`](Assets/Scripts/Airi)). Set its address and autopilot time on the component, or start a player build with `-airi-bridge ws://127.0.0.1:<port>` and `-airi-autopilot <seconds>`.
 - The bridge listens only on 127.0.0.1. It accepts the game, which sends no `Origin` header, and web pages only from this computer.
-- Gestures, emotions and speech are not in the Unity version yet, so `act` has no `gesture` type.
+- `act` can play a `gesture` while Airi stands still and the [live motion server](tools/ardy/README.md) runs. With `interact`, `run: true` makes her run there. Emotions and speech are not in the Unity version yet.
 
 ## Project layout
 
@@ -106,6 +106,8 @@ AIRI ⇄ MCP (stdio or HTTP) ⇄ bridge/airi-mcp.mjs ⇄ WebSocket (127.0.0.1:87
 ### Motion capture
 
 The clips in `Assets/Animations/Generated` (idle, walk, sit, type, lie, eat, and the in-between poses for getting into and out of bed) are made from humanoid muscle values by `ClipFactory`. They play on any VRM, but they are placeholders. **Real motion capture is the biggest step up in quality:** put a humanoid clip named `Idle`, `Walk`, `Sit`, `Type`, `Lie` or `Eat` (an `.fbx` with its rig set to Humanoid, or an `.anim`) in `Assets/Animations/Mocap`, then run **AiWorld ▸ Build Animator**. Mixamo (free with an Adobe account) and the Unity Asset Store have suitable clips.
+
+Lying back on the bed and sitting up use motion capture from the [CMU Graphics Lab Motion Capture Database](https://mocap.cs.cmu.edu/) (subject 111, trial 12). The data used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding from NSF EIA-0196217. To make the clips again, put `111.asf` and `111_12.amc` in a folder and run **AiWorld ▸ Import CMU Bed Clips**.
 
 ### Props
 

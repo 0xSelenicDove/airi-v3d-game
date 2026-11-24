@@ -199,15 +199,16 @@ export function createMcpServer(link) {
   server.registerTool('act', {
     title: 'Act',
     description: 'Do something as Airi. type "interact": use an object (object id and verb from look, for example bed + sleep). '
-      + '"say": say something (the words show above your head). "wait": stay put for some game minutes. Gestures are not '
-      + 'in this version yet. If you are busy with an activity, the action runs when it ends, unless interrupt is true, '
+      + '"say": say something (the words show above your head). "wait": stay put for some game minutes. "gesture": '
+      + 'move your body (a name from world_status: gestures), while standing still and when the live motion server runs. If you are busy with an activity, the action runs when it ends, unless interrupt is true, '
       + 'which ends the activity first (you get up the usual way).',
     inputSchema: {
       type: z.enum(['interact', 'say', 'gesture', 'wait']),
       object: z.string().optional().describe('interact: the object id, from look'),
       verb: z.string().optional().describe('interact: one of that object\'s verbs, from look'),
+      run: z.boolean().optional().describe('interact: run there, when the way is at least 3 m and the live motion server runs'),
       text: z.string().max(400).optional().describe('say: what to say'),
-      gesture: z.string().optional().describe('gesture, or with say: a gesture name from world_status'),
+      gesture: z.string().optional().describe('gesture: a gesture name from world_status'),
       minutes: z.number().min(1).max(120).optional().describe('wait: game minutes'),
       emotion: z.string().optional().describe('a facial emotion from world_status, for example happy'),
       thought: z.string().max(200).optional().describe('a short inner thought, shown above your head'),

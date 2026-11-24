@@ -21,6 +21,8 @@ namespace AiWorld.Airi
         public bool Controlled { get; private set; }
         /// <summary>the character is standing by for AIRI's next action</summary>
         public bool Awaiting => waitingSince >= 0;
+        /// <summary>AIRI gave an action that the character has not started yet</summary>
+        public bool HasQueued => queued.HasValue;
 
         /// <summary>told when the character starts waiting for a decision</summary>
         public event Action OnTurn;

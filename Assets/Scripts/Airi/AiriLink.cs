@@ -139,9 +139,9 @@ namespace AiWorld.Airi
             ["time"] = GameClock.Instance ? GameClock.Instance.Clock : "",
             ["you"] = You(),
             ["others"] = new JArray(Others().Select(a => new JObject { ["name"] = a.displayName, ["doing"] = a.Doing, ["place"] = Place(a) })),
-            ["gestures"] = new JArray(),
+            ["gestures"] = new JArray(Character.rig.Live.Gestures.Select(g => new JValue(g))),
             ["emotions"] = new JArray(),
-            ["note"] = "Unity version: act can interact, say (the words show above your head) and wait. Gestures, emotions, speech and small talk are not ported yet.",
+            ["note"] = "Unity version: act can interact (with run: true to run there), say (the words show above your head), wait, and gesture while standing still when the live motion server runs (gestures is then not empty). Emotions, speech and small talk are not ported yet.",
         };
 
         JObject Look()
@@ -187,7 +187,7 @@ namespace AiWorld.Airi
                     if (it.User && it.User != Character) throw new Exception($"{objectId} is in use by {it.User.displayName}");
                     bool now = Brain.Awaiting;
                     if (interrupt && !now) Character.StopActivity();
-                    Brain.Queue(new Choice { target = it, affordance = aff, reason = thought });
+                    Brain.Queue(new Choice { target = it, affordance = aff, reason = thought, run = p["run"]?.Type == JTokenType.Boolean && (bool)p["run"] });
                     return Accepted(now, interrupt);
                 }
                 case "say":
@@ -206,9 +206,18 @@ namespace AiWorld.Airi
                     return Accepted(now, interrupt);
                 }
                 case "gesture":
-                    throw new Exception("gestures are not in the Unity version yet");
+                {
+                    var gesture = Str("gesture") ?? throw new Exception("gesture needs \"gesture\" (see world_status: gestures)");
+                    var live = Character.rig.Live;
+                    if (!live.Available) throw new Exception("gestures need the live motion server, which is not running");
+                    if (!live.Gestures.Contains(gesture)) throw new Exception($"there is no gesture \"{gesture}\" (there are: {string.Join(", ", live.Gestures)})");
+                    if (Brain.HasQueued) throw new Exception($"{Character.displayName} is about to start the action you gave, so a gesture would be cut short");
+                    if (!Character.rig.StandingFree) throw new Exception($"gestures play while standing still, and {Character.displayName} is {Character.Doing}");
+                    live.Play(gesture);
+                    return new JObject { ["accepted"] = $"playing {gesture}", ["doing"] = Character.Doing };
+                }
                 default:
-                    throw new Exception("type must be one of interact, say, wait");
+                    throw new Exception("type must be one of interact, say, gesture, wait");
             }
         }
 
