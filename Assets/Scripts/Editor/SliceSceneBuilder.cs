@@ -93,9 +93,12 @@ namespace AiWorld.EditorTools
 
             var wallMat = Mat("Wall", new Color(0.93f, 0.9f, 0.84f), 0.9f);
             var trimMat = Mat("Trim", new Color(0.98f, 0.97f, 0.95f), 0.5f);
-            Wall("Wall Back", world, new Vector3(0, 0, 3), 8 + WallT, Vector3.forward, wallMat, trimMat);
-            Wall("Wall Left", world, new Vector3(-4, 0, 0), 6, Vector3.left, wallMat, trimMat);
-            Wall("Wall Right", world, new Vector3(4, 0, 0), 6, Vector3.right, wallMat, trimMat);
+            // the back and front walls run the full width, and the side walls stop against them: two walls sharing a
+            // corner, or skirting boards crossing in it, have faces in the same plane, and those flicker
+            const float SkirtT = 0.02f;
+            Wall("Wall Back", world, new Vector3(0, 0, 3), 8 + WallT, Vector3.forward, wallMat, trimMat, 8 - WallT, 0f);
+            Wall("Wall Left", world, new Vector3(-4, 0, 0), 6 - WallT, Vector3.left, wallMat, trimMat, 6 - WallT - SkirtT, -SkirtT / 2);
+            Wall("Wall Right", world, new Vector3(4, 0, 0), 6 - WallT, Vector3.right, wallMat, trimMat, 6 - WallT - SkirtT, -SkirtT / 2);
             // front wall with the doorway (0.9 m door + 0.06 m frame each side)
             const float gap = 0.51f;
             var front = new GameObject("Wall Front").transform;
@@ -120,10 +123,11 @@ namespace AiWorld.EditorTools
             house.door.spring = 25f;
             house.door.damper = 7f;
 
-            var bed1 = MakeBed("Bed", new Vector3(-3.42f, 0, 1.92f), Vector3.forward, world);
-            var bed2 = MakeBed("Bed 2", new Vector3(-2.9f, 0, -2.38f), Vector3.left, world);
+            // (the beds stand 1.5 cm clear of the skirting boards)
+            var bed1 = MakeBed("Bed", new Vector3(-3.385f, 0, 1.805f), Vector3.forward, world);
+            var bed2 = MakeBed("Bed 2", new Vector3(-2.805f, 0, -2.38f), Vector3.left, world);
             var desk = MakeDesk(new Vector3(1.6f, 0, 2.6f), world);
-            var fridge = MakeFridge(new Vector3(3.58f, 0, -0.9f), world);
+            var fridge = MakeFridge(new Vector3(3.565f, 0, -0.9f), world);
             var garden = MakeGarden(world);
 
             // ---------------------------------------------------------- NavMesh
@@ -760,7 +764,7 @@ namespace AiWorld.EditorTools
         }
 
         /// <summary>a wall with a skirting board, centred at <paramref name="at"/> on the floor</summary>
-        static void Wall(string name, Transform parent, Vector3 at, float length, Vector3 outward, Material wall, Material trim)
+        static void Wall(string name, Transform parent, Vector3 at, float length, Vector3 outward, Material wall, Material trim, float skirtLength, float skirtShift)
         {
             var w = new GameObject(name).transform;
             w.SetParent(parent);
@@ -768,8 +772,9 @@ namespace AiWorld.EditorTools
             bool alongX = Mathf.Abs(outward.z) > 0.5f;
             var size = alongX ? new Vector3(length, WallH, WallT) : new Vector3(WallT, WallH, length);
             Block("Wall", w, at + Vector3.up * WallH / 2, size, wall);
-            var skirt = alongX ? new Vector3(length - WallT, 0.1f, 0.02f) : new Vector3(0.02f, 0.1f, length - WallT);
-            Block("Skirting", w, at + Vector3.up * 0.05f - outward * (WallT / 2 + 0.01f), skirt, trim);
+            var skirt = alongX ? new Vector3(skirtLength, 0.1f, 0.02f) : new Vector3(0.02f, 0.1f, skirtLength);
+            var along = alongX ? Vector3.right : Vector3.forward;
+            Block("Skirting", w, at + Vector3.up * 0.05f - outward * (WallT / 2 + 0.01f) + along * skirtShift, skirt, trim);
             w.gameObject.AddComponent<WallCutaway>().outward = outward;
         }
 

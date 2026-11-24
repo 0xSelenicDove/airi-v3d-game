@@ -24,6 +24,15 @@ namespace AiWorld.EditorTools
             }
         }
     
+        /// <summary>Make the bed clips from CMU motion capture: -executeMethod ...ImportCmu -cmuDir folder</summary>
+        public static void ImportCmu()
+        {
+            var args = System.Environment.GetCommandLineArgs();
+            int i = System.Array.IndexOf(args, "-cmuDir");
+            if (i < 0 || i + 1 >= args.Length) throw new System.ArgumentException("-cmuDir folder is required");
+            CmuImporter.ImportBedClips(args[i + 1]);
+        }
+
         /// <summary>Build the room scene (SliceSceneBuilder) from the command line.</summary>
         public static void BuildScene()
         {

@@ -12,8 +12,8 @@ namespace AiWorld.Agents
     ///
     ///  R0  nothing passes through anything else: walking is on the NavMesh, doors and lids are rigid bodies, and
     ///      the body has colliders;
-    ///  R2  to lie down, walk to the side of the bed, turn the quilt back, sit on its edge, lower the body onto its
-    ///      side as the legs come up onto the bed, roll onto the back and pull the quilt over; get up in reverse;
+    ///  R2  to lie down, walk to the side of the bed, turn the quilt back, sit on its edge, draw the knees up and swivel
+    ///      onto the bed, lie back on the hands and pull the quilt over; get up in reverse;
     ///  R3  to pass the door, take its handle, walk with it as it swings, go round it, and close it from the other side;
     ///  R4  when the way is blocked, stop and think, try another way, and give up after a few tries.
     /// </summary>
@@ -47,12 +47,13 @@ namespace AiWorld.Agents
         float thoughtUntil;
         Choice? requested;
         bool cutShort;
+        bool passingDoor;
 
         /// <summary>
         /// ask for a particular action next (from an LLM, the AIRI bridge, or a test). The current activity ends early
         /// and the body gets up the proper way before starting it. Returns false if there is no such thing or verb.
         /// </summary>
-        public bool Request(string objectId, string verb, string reason = null)
+        public bool Request(string objectId, string verb, string reason = null, bool run = false)
         {
             foreach (var it in Interactable.All)
             {
@@ -60,7 +61,7 @@ namespace AiWorld.Agents
                 foreach (var a in it.affordances)
                 {
                     if (a.verb != verb) continue;
-                    requested = new Choice { target = it, affordance = a, reason = reason };
+                    requested = new Choice { target = it, affordance = a, reason = reason, run = run };
                     cutShort = true;
                     return true;
                 }
@@ -132,6 +133,7 @@ namespace AiWorld.Agents
                     continue;
                 }
                 using_ = choice.target;
+                hurry = choice.run;
                 Think(choice.reason ?? $"I'll {choice.affordance.verb.Replace('_', ' ')}.");
                 yield return Use(choice.target, choice.affordance);
                 choice.target.Free(this);
@@ -161,13 +163,19 @@ namespace AiWorld.Agents
 
         // ------------------------------------------------------------------ walking (R0, R3, R4)
 
+        /// <summary>a run is a jog, because the rooms are small: it needs this much path to get going and stop again</summary>
+        const float RunSpeed = 2f, RunFrom = 3f;
+        bool hurry;
+
         /// <summary>walk to a point, through the front door if it is on the other side of the house wall</summary>
         IEnumerator WalkTo(Vector3 p)
         {
             var house = House.Instance;
             if (house && house.IsInside(transform.position) != house.IsInside(p))
             {
+                passingDoor = true;
                 yield return PassDoor(goingOut: house.IsInside(transform.position));
+                passingDoor = false;
                 if (!ok) yield break;
             }
             yield return NavTo(p);
@@ -179,6 +187,15 @@ namespace AiWorld.Agents
             ok = false;
             EnsureNav();
             if (NavMesh.SamplePosition(p, out var hit, 0.6f, NavMesh.AllAreas)) p = hit.position;
+            // (a door or a chair needs the exact path and free hands: those stay on the NavMesh)
+            bool run = hurry && !passingDoor;
+            if (!passingDoor) hurry = false;
+            if (rig && rig.Live.Available && rig.FreeBody && !passingDoor)
+            {
+                yield return LiveNavTo(p, run);
+                if (ok) yield break;
+                EnsureNav();
+            }
             for (int attempt = 0; attempt < 3; attempt++)
             {
                 nav.isStopped = false;
@@ -203,6 +220,50 @@ namespace AiWorld.Agents
                 Think(attempt < 2 ? "Something is in the way… let me find another way round." : "I can't get through. I'll do something else.");
                 yield return new WaitForSeconds(1.2f);
             }
+        }
+
+        /// <summary>
+        /// walk with generated motion: the live stream moves the body along the NavMesh path, and the agent only keeps up.
+        /// Sets ok on arrival. On a very short distance or a failed stream it does nothing, and the NavMesh walks instead.
+        /// </summary>
+        IEnumerator LiveNavTo(Vector3 p, bool run)
+        {
+            ok = false;
+            if (Flat(p - transform.position).magnitude < 0.3f) yield break;
+            var path = new NavMeshPath();
+            if (!nav.CalculatePath(p, path) || path.status != NavMeshPathStatus.PathComplete) yield break;
+            float length = 0f;
+            for (int i = 1; i < path.corners.Length; i++) length += Vector3.Distance(path.corners[i - 1], path.corners[i]);
+            nav.ResetPath();
+            nav.updatePosition = false;
+            nav.updateRotation = false;
+            run &= length >= RunFrom;
+            float speed = run ? RunSpeed : nav.speed;
+            if (rig.Live.Walk(path.corners, speed, run))
+            {
+                float limit = Time.time + length / speed + 8f;
+                while (rig.Live.Walking && Time.time < limit)
+                {
+                    nav.nextPosition = transform.position;
+                    yield return null;
+                }
+                var from = transform.position;
+                var to = new Vector3(p.x, from.y, p.z);
+                if (!rig.Live.Walking && Flat(to - from).magnitude < 0.3f)
+                {
+                    // the last few centimetres, so a routine that starts here starts in its exact place
+                    for (float t = 0; t < 0.2f; t += Time.deltaTime)
+                    {
+                        transform.position = Vector3.Lerp(from, to, Mathf.SmoothStep(0, 1, t / 0.2f));
+                        yield return null;
+                    }
+                    transform.position = to;
+                    ok = true;
+                }
+            }
+            nav.Warp(transform.position);
+            nav.updatePosition = true;
+            nav.updateRotation = true;
         }
 
         void EnsureNav()
@@ -299,7 +360,16 @@ namespace AiWorld.Agents
             var door = house.door;
             var handle = house.Handle(outer);
             yield return TurnTo(handle.position - transform.position, 0.4f);
-            rig.Reach(AvatarIKGoal.RightHand, handle);
+            // the wrist stops just off the handle and short of it along the door, so the hand lies on the handle, not in the door
+            var doorNormal = house.FaceNormal(outer);
+            var shoulder = rig.Animator.GetBoneTransform(HumanBodyBones.RightUpperArm).position;
+            var acrossDoor = Vector3.ProjectOnPlane(handle.position - shoulder, doorNormal);
+            acrossDoor.y = 0f;
+            acrossDoor = acrossDoor.sqrMagnitude > 1e-4f ? acrossDoor.normalized : Vector3.Cross(Vector3.up, doorNormal);
+            var wristOffset = doorNormal * 0.055f - acrossDoor * (rig.HandLength * 0.42f);
+            // (the leaf's middle is halfway between its two handles, and it is 4.4 cm thick)
+            var doorFace = (door.handleFront.position + door.handleBack.position) * 0.5f + doorNormal * 0.022f;
+            rig.Reach(AvatarIKGoal.RightHand, handle, handle.InverseTransformVector(wristOffset), handle.InverseTransformDirection(doorNormal), handle.InverseTransformPoint(doorFace));
             rig.LookAt(handle.position);
             float wait = 0;
             while (!rig.HandArrived(AvatarIKGoal.RightHand) && (wait += Time.deltaTime) < 1.5f) yield return null;
@@ -317,6 +387,8 @@ namespace AiWorld.Agents
                 rig.LookAt(handle.position);
                 yield return null;
             }
+            rig.DrawBack(AvatarIKGoal.RightHand, 0.15f);
+            yield return new WaitForSeconds(0.24f);
             rig.LetGo(AvatarIKGoal.RightHand);
             rig.LookAt(null);
             Manual(false);
@@ -339,8 +411,8 @@ namespace AiWorld.Agents
             Manual(true);
             float top = bed.mattressTop;
             var lieRot = bed.lie.rotation;
-            // where the hips are while lying on the side, facing the room: a little toward the room from lying on the back
-            var onSide = bed.lie.position + bed.side.forward * 0.14f;
+            // where the hips are while sitting on the bed with the knees up, between the edge and lying down
+            var onBed = Vector3.Lerp(bed.sit.position, bed.lie.position, 0.55f);
 
             // bend over the bed, take the quilt by its edge and turn it back onto the half by the wall
             Doing = "turning the quilt back";
@@ -351,27 +423,50 @@ namespace AiWorld.Agents
             yield return TurnTo(bed.sit.forward, 0.6f);
             nav.enabled = false;
             rig.FitOnto(bed.transform, bed.mattressHalf, top);
-            // the feet stay where they stand while the hips go back and down onto the edge
-            rig.PlantFeetHere(bed.sit.forward);
-            rig.Play(AvatarRig.Sit, 1.0f);
-            yield return SitBackOnto(bed.sit, 1.1f, top + 0.06f);
-            yield return new WaitForSeconds(0.5f);
+            // with the live stream: sit on the edge, swing the legs up to sit along the bed, lie back, and hold
+            bool liveInBed = rig.Live.Available && rig.Live.Stage(new[]
+            {
+                Step("motion_sit_down", 1.6f, bed.sit.position, bed.sit.rotation, top + 0.06f),
+                Step("motion_lie_down", 2.2f, onBed, lieRot, top + 0.1f, "longsit"),
+                Step("motion_lie_down", 1.8f, bed.lie.position, lieRot, top + 0.1f, "lie"),
+                Step("motion_lie", 0.6f, bed.lie.position, lieRot, top + 0.1f, "lie"),
+            }, hold: true);
+            if (liveInBed)
+            {
+                rig.Play(AvatarRig.Sit, 0.6f);
+                yield return new WaitForSeconds(3.8f);
+                rig.Play(AvatarRig.Lie, 0.6f);
+                yield return new WaitForSeconds(2.5f);
+                liveInBed = rig.Live.Walking;
+                if (!liveInBed)
+                {
+                    transform.SetPositionAndRotation(new Vector3(bed.lie.position.x, transform.position.y, bed.lie.position.z), lieRot);
+                    rig.HoldHipsAt(top + 0.1f);
+                }
+            }
+            else
+            {
+                // the feet stay where they stand while the hips go back and down onto the edge
+                rig.PlantFeetHere(bed.sit.forward);
+                rig.Play(AvatarRig.Sit, 1.0f);
+                yield return SitBackOnto(bed.sit, 1.1f, top + 0.06f);
+                yield return new WaitForSeconds(0.5f);
 
-            // lie down the way people are taught to (the log roll): the arms lower the upper body onto its side while
-            // the legs rise onto the bed. The clip is made facing the foot end, so the root turns to face it now; the
-            // clip's first pose is sitting facing the room, so the body does not move when it does.
-            rig.SetMirror(!RoomOnLeft(bed));
-            transform.rotation = lieRot;
-            rig.PlayNow(AvatarRig.SideDown);
-            rig.PlantFeet(null);
-            yield return LogRoll(bed.sit.position, onSide, lieRot, 2.6f, down: true);
-            yield return new WaitForSeconds(0.25f);
+                // draw the knees up and swivel on the seat, so the legs come over the edge onto the bed. The clip is made
+                // facing the foot end, so the root turns to face it now; its first pose is sitting facing the room, so the
+                // body does not move when it does.
+                rig.SetMirror(!RoomOnLeft(bed));
+                transform.rotation = lieRot;
+                rig.PlayNow(AvatarRig.SwingIn);
+                rig.PlantFeet(null);
+                yield return Move(onBed, lieRot, rig.ClipSeconds(AvatarRig.SwingIn), top + 0.06f, top + 0.1f, 0.07f);
 
-            // roll onto the back
-            rig.Play(AvatarRig.RollBack, 0.2f);
-            yield return Move(bed.lie.position, lieRot, 1.4f, top + 0.16f, top + 0.1f);
-            rig.Play(AvatarRig.Lie, 0.5f);
-            yield return new WaitForSeconds(0.4f);
+                // lie back on the hands (motion capture), the head to the pillow, and let the legs down
+                rig.Play(AvatarRig.LieBack, 0.15f);
+                yield return Move(bed.lie.position, lieRot, rig.ClipSeconds(AvatarRig.LieBack), top + 0.1f, top + 0.1f);
+                rig.Play(AvatarRig.Lie, 0.9f);
+                yield return new WaitForSeconds(0.9f);
+            }
 
             // reach for the quilt's edge and pull it over: it lands on the body from above (the body is a cloth
             // collider, grown in gently so the folded quilt beside the body is eased aside, not knocked)
@@ -389,8 +484,8 @@ namespace AiWorld.Agents
             while (!cutShort && IsNight()) yield return null;   // still sleeping (and resting): Doing stays "sleep"
             Asleep = false;
 
-            // getting up is the same in reverse: throw the quilt back, roll onto the side facing the room, push up
-            // with the arms while the legs go down to the floor, and stand
+            // getting up is the same in reverse: throw the quilt back, sit up on the hands (motion capture), swivel on the
+            // seat so the legs go over the edge, and stand
             Doing = "getting up";
             yield return HandOnQuilt(bed, 1f, 0.45f);
             while (bed.blanket.Folded < 0.98f) yield return null;
@@ -398,17 +493,35 @@ namespace AiWorld.Agents
             rig.FadeClothCapsules(0f, 0.5f);
             yield return new WaitForSeconds(0.55f);
             bed.blanket.Sleeper(false);
-            rig.Play(AvatarRig.RollSide, 0.25f);
-            yield return Move(onSide, lieRot, 1.4f, top + 0.1f, top + 0.16f);
-            yield return new WaitForSeconds(0.2f);
-            rig.Play(AvatarRig.SideUp, 0.15f);
-            yield return LogRoll(bed.sit.position, onSide, lieRot, 2.6f, down: false);
-            // sitting on the edge facing the room again: the root turns back under the body
-            transform.rotation = bed.sit.rotation;
-            rig.PlayNow(AvatarRig.Sit);
-            rig.PlantFeet(bed.sit.position, bed.sit.forward);
-            yield return new WaitForSeconds(0.8f);
-            yield return StandUp(bed.side, rejoinNav: false);
+            bool liveOutOfBed = liveInBed && rig.Live.Walking && rig.Live.Stage(new[]
+            {
+                Step("motion_get_up", 1.8f, onBed, lieRot, top + 0.1f, "longsit"),
+                Step("motion_get_up", 2.2f, bed.sit.position, bed.sit.rotation, top + 0.06f),
+                Step("motion_stand_up", 1.6f, bed.side.position, bed.side.rotation, null),
+            }, hold: false);
+            if (liveOutOfBed)
+            {
+                rig.Play(AvatarRig.Sit, 0.6f);
+                yield return UntilStageEnds(9f);
+                rig.Play(AvatarRig.Locomotion, 0.4f);
+                yield return Glide(bed.side, 0.25f);
+            }
+            else
+            {
+                // draw the knees up first, then sit up on the hands
+                rig.Play(AvatarRig.LieKnees, 0.9f);
+                yield return new WaitForSeconds(0.95f);
+                rig.Play(AvatarRig.SitUp, 0.12f);
+                yield return Move(onBed, lieRot, rig.ClipSeconds(AvatarRig.SitUp), top + 0.1f, top + 0.1f);
+                rig.Play(AvatarRig.SwingOut, 0.15f);
+                yield return Move(bed.sit.position, lieRot, rig.ClipSeconds(AvatarRig.SwingOut), top + 0.1f, top + 0.06f, 0.07f);
+                // sitting on the edge facing the room again: the root turns back under the body
+                transform.rotation = bed.sit.rotation;
+                rig.PlayNow(AvatarRig.Sit);
+                rig.PlantFeet(bed.sit.position, bed.sit.forward);
+                yield return new WaitForSeconds(0.8f);
+                yield return StandUp(bed.side, rejoinNav: false);
+            }
             rig.FitOff();
 
             // make the bed: lay the quilt back over it
@@ -419,6 +532,15 @@ namespace AiWorld.Agents
             rig.UnfitClothCapsules();
             rig.FadeClothCapsules(1f, 0f);
             Manual(false);
+        }
+
+        static LiveMotion.StageStep Step(string prompt, float seconds, Vector3 position, Quaternion facing, float? hipsY, string pose = null) =>
+            new() { prompt = prompt, seconds = seconds, position = position, facing = facing, hipsY = hipsY, pose = pose };
+
+        /// <summary>wait for a furniture stage that ends by itself</summary>
+        IEnumerator UntilStageEnds(float limit)
+        {
+            for (float t = 0; t < limit && rig.Live.Walking; t += Time.deltaTime) yield return null;
         }
 
         /// <summary>is the room on the left of someone lying in this bed? (the bed clips are made that way round)</summary>
@@ -456,32 +578,6 @@ namespace AiWorld.Agents
         }
 
         /// <summary>
-        /// the body's path while the SideDown (or, reversed, SideUp) clip plays: the hips stay over the edge while the
-        /// trunk tips onto its side (they only rise as it tips: the lower hip goes down as the trunk goes over), and
-        /// they move in toward the middle of the bed as the legs come up (moving in earlier would drag the hanging
-        /// legs into the mattress)
-        /// </summary>
-        IEnumerator LogRoll(Vector3 sitting, Vector3 onSide, Quaternion facing, float seconds, bool down)
-        {
-            float top = 0;
-            if (using_ && using_.TryGetComponent(out BedParts bed)) top = bed.mattressTop;
-            float y = transform.position.y;
-            for (float t = 0; ; t += Time.deltaTime)
-            {
-                float k = Mathf.Clamp01(t / seconds);
-                float kd = down ? k : 1f - k;     // where the clip is, as if lying down
-                float tip = Mathf.SmoothStep(0, 1, Mathf.Clamp01(kd / 0.6f));
-                float inward = Mathf.SmoothStep(0, 1, Mathf.Clamp01((kd - 0.35f) / 0.65f));
-                var p = Vector3.Lerp(sitting, onSide, inward);
-                transform.SetPositionAndRotation(new Vector3(p.x, y, p.z), facing);
-                // sitting: the hips 6 cm over the mattress; on the side: 16 cm (half the pelvis); on the way, higher still
-                rig.HoldHipsAt(top + Mathf.Lerp(0.06f, 0.16f, tip) + 0.09f * Mathf.Sin(Mathf.PI * tip));
-                if (k >= 1f) break;
-                yield return null;
-            }
-        }
-
-        /// <summary>
         /// sit down onto something behind: the hips go back first and come down as they get over it, so the seat
         /// never catches its edge on the way
         /// </summary>
@@ -506,7 +602,7 @@ namespace AiWorld.Agents
         }
 
         /// <summary>move the body over the bed (its height stays the NavMesh's) and lower or raise the hips with it</summary>
-        IEnumerator Move(Vector3 to, Quaternion facing, float seconds, float hipsFrom, float hipsTo)
+        IEnumerator Move(Vector3 to, Quaternion facing, float seconds, float hipsFrom, float hipsTo, float hipsRise = 0f)
         {
             Vector3 p0 = transform.position;
             var r0 = transform.rotation;
@@ -515,7 +611,7 @@ namespace AiWorld.Agents
             {
                 float k = Mathf.SmoothStep(0, 1, t / seconds);
                 transform.SetPositionAndRotation(Vector3.Lerp(p0, p1, k), Quaternion.Slerp(r0, facing, k));
-                rig.HoldHipsAt(Mathf.Lerp(hipsFrom, hipsTo, k));
+                rig.HoldHipsAt(Mathf.Lerp(hipsFrom, hipsTo, k) + hipsRise * Mathf.Sin(Mathf.PI * Mathf.Clamp01(t / seconds)));
                 yield return null;
             }
             transform.SetPositionAndRotation(p1, facing);
@@ -576,15 +672,45 @@ namespace AiWorld.Agents
             yield return StepTo(desk.stepIn.position, toDesk);
             Doing = "sitting down";
             nav.enabled = false;
-            rig.Play(AvatarRig.Sit, 0.8f);
-            rig.HoldHipsAt(desk.seatTop + 0.07f);
-            rig.PlantFeet(chair.seat.position, chair.seat.forward);
-            yield return Glide(chair.seat, 0.8f);
+            var seatAt = chair.seat.position;
+            bool liveSeat = rig.Live.Available && rig.Live.Stage(new[]
+            {
+                Step("motion_sit_down", 1.5f, seatAt, chair.seat.rotation, desk.seatTop + 0.07f),
+                Step("motion_sit", 0.4f, seatAt, chair.seat.rotation, desk.seatTop + 0.07f),
+            }, hold: true);
+            if (liveSeat)
+            {
+                rig.Play(AvatarRig.Sit, 0.6f);
+                yield return new WaitForSeconds(2f);
+                liveSeat = rig.Live.Walking;
+            }
+            if (!liveSeat)
+            {
+                rig.Play(AvatarRig.Sit, 0.8f);
+                rig.HoldHipsAt(desk.seatTop + 0.07f);
+                rig.PlantFeet(chair.seat.position, chair.seat.forward);
+                yield return Glide(chair.seat, 0.8f);
+            }
             // and slide in to the desk with the chair, the feet walking it in
             chair.Slide(0f, 0.35f);
-            while (chair.Moving) { transform.position = chair.seat.position; rig.PlantFeet(chair.seat.position, chair.seat.forward); yield return null; }
-            transform.position = chair.seat.position;
-            rig.PlantFeet(chair.seat.position, chair.seat.forward);
+            while (chair.Moving)
+            {
+                if (liveSeat) rig.Live.StageOffset = chair.seat.position - seatAt;
+                else { transform.position = chair.seat.position; rig.PlantFeet(chair.seat.position, chair.seat.forward); }
+                yield return null;
+            }
+            if (liveSeat) rig.Live.StageOffset = chair.seat.position - seatAt;
+            else { transform.position = chair.seat.position; rig.PlantFeet(chair.seat.position, chair.seat.forward); }
+
+            // the keyboard is on the laptop's base, between its front edge (where the closed lid ends) and the hinge
+            var keysCentre = Vector3.Lerp(desk.lidEdge.position, desk.lid.transform.position, 0.45f) + Vector3.up * 0.03f;
+            var keysRight = Vector3.Cross(Vector3.up, toDesk).normalized;
+            var leftKeys = new GameObject("Keys Left").transform;
+            var rightKeys = new GameObject("Keys Right").transform;
+            leftKeys.SetParent(desk.transform, true);
+            rightKeys.SetParent(desk.transform, true);
+            leftKeys.position = keysCentre - keysRight * 0.08f;
+            rightKeys.position = keysCentre + keysRight * 0.08f;
 
             // open the lid with the right hand
             rig.Reach(AvatarIKGoal.RightHand, desk.lidEdge);
@@ -595,7 +721,24 @@ namespace AiWorld.Agents
             rig.LetGo(AvatarIKGoal.RightHand);
             rig.Play(AvatarRig.Type, 0.6f);
             rig.LookAt(desk.screen.position);
+            if (liveSeat)
+            {
+                // generated typing, with both hands kept on the keys
+                yield return new WaitForSeconds(0.45f);
+                rig.Live.HoldPrompt("motion_type");
+                rig.Reach(AvatarIKGoal.LeftHand, leftKeys);
+                rig.Reach(AvatarIKGoal.RightHand, rightKeys);
+            }
             yield return Activity(aff);
+            if (liveSeat)
+            {
+                rig.LetGo(AvatarIKGoal.LeftHand);
+                rig.LetGo(AvatarIKGoal.RightHand);
+                rig.Live.HoldPrompt("motion_sit");
+                yield return new WaitForSeconds(0.5f);
+            }
+            Destroy(leftKeys.gameObject);
+            Destroy(rightKeys.gameObject);
 
             Doing = "closing the laptop";
             rig.Play(AvatarRig.Sit, 0.5f);
@@ -609,8 +752,21 @@ namespace AiWorld.Agents
             // slide out with the chair, stand up over the feet, step out and push the chair back in
             Doing = "getting up";
             chair.Slide(1f, 0.35f);
-            while (chair.Moving) { transform.position = chair.seat.position; rig.PlantFeet(chair.seat.position, chair.seat.forward); yield return null; }
-            yield return StandUp(desk.stepIn, rejoinNav: false);
+            while (chair.Moving)
+            {
+                if (liveSeat) rig.Live.StageOffset = chair.seat.position - seatAt;
+                else { transform.position = chair.seat.position; rig.PlantFeet(chair.seat.position, chair.seat.forward); }
+                yield return null;
+            }
+            if (liveSeat && rig.Live.Walking)
+            {
+                rig.Live.StageOffset = Vector3.zero;
+                rig.Live.Stage(new[] { Step("motion_stand_up", 1.6f, desk.stepIn.position, desk.stepIn.rotation, null) }, hold: false);
+                yield return UntilStageEnds(5f);
+                rig.Play(AvatarRig.Locomotion, 0.4f);
+                yield return Glide(desk.stepIn, 0.25f);
+            }
+            else yield return StandUp(desk.stepIn, rejoinNav: false);
             Manual(true);
             yield return StepTo(desk.side.position, -Flat(desk.side.position - desk.stepIn.position));
             Manual(false);

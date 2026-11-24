@@ -9,6 +9,8 @@ namespace AiWorld.Agents
         public Interactable target;
         public Affordance affordance;
         public string reason;
+        /// <summary>run there, when the way is long enough and the live motion server runs</summary>
+        public bool run;
     }
 
     /// <summary>Decides what to do next. The mock brain below is rule-based; an LLM brain plugs in here later.</summary>

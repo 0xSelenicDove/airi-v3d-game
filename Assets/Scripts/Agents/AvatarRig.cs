@@ -11,6 +11,7 @@ namespace AiWorld.Agents
     ///  * cross-fades between body states (walk, sit, type, lie), so every change of pose is a blend over time;
     ///  * places a hand on a target with IK (a door handle, a fridge door, a laptop lid) and blends it in and out;
     ///  * keeps the feet planted on the floor while sitting, so the legs never hang into a seat or a mattress;
+    ///  * on a bed, keeps the arms clear of the character's own torso and thighs (see <see cref="ArmClearance"/>);
     ///  * turns the head and the eyes toward what the character attends to, and blinks;
     ///  * lifts or lowers the whole model so the hips rest on the seat or the mattress, whatever the avatar's size,
     ///    and on a bed fits the body (clothes included) onto the mattress's surface, so it never sinks into it;
@@ -20,7 +21,7 @@ namespace AiWorld.Agents
     public class AvatarRig : MonoBehaviour
     {
         public const string Locomotion = "Locomotion", Sit = "Sit", Type = "Type", Lie = "Lie", Eat = "Eat",
-            SitLean = "SitLean", Stoop = "Stoop", SideDown = "SideDown", SideUp = "SideUp", RollBack = "RollBack", RollSide = "RollSide";
+            SitLean = "SitLean", Stoop = "Stoop", SwingIn = "SwingIn", SwingOut = "SwingOut", LieBack = "LieBack", LieKnees = "LieKnees", SitUp = "SitUp";
 
         Animator anim;
         Vrm10Instance vrm;
@@ -61,7 +62,8 @@ namespace AiWorld.Agents
         }
         public string State => state;
         /// <summary>lying, or on the way down or up (the bed clips)</summary>
-        public bool Lying => state == Lie || state == SideDown || state == SideUp || state == RollBack || state == RollSide;
+        public bool Lying => state == Lie || state == LieBack || state == LieKnees || state == SitUp;
+        bool OnBedMoving => state == SwingIn || state == SwingOut || state == LieBack || state == LieKnees || state == SitUp || (surface && Live.Walking);
         Transform headBone;
 
         class HandIk
@@ -69,7 +71,26 @@ namespace AiWorld.Agents
             public Transform target;
             public Vector3 offset;
             public float weight, goal;
+            public Vector3? surfaceNormal;   // in the target's space: the hand lies flat on this surface, palm toward it
+            public Vector3 surfacePoint;     // a point on that surface, in the target's space
+            public float push;               // how far the wrist has backed off so the fingertips stay outside it
+            public float back, backGoal;     // how far the hand has drawn away from the surface before letting go
         }
+
+        /// <summary>how far fingertip joints stay off a surface they rest on (m): a finger is about this thick</summary>
+        const float FingerClear = 0.014f;
+        static readonly (HumanBodyBones middle, HumanBodyBones end)[] LeftFingers =
+        {
+            (HumanBodyBones.LeftThumbIntermediate, HumanBodyBones.LeftThumbDistal), (HumanBodyBones.LeftIndexIntermediate, HumanBodyBones.LeftIndexDistal),
+            (HumanBodyBones.LeftMiddleIntermediate, HumanBodyBones.LeftMiddleDistal), (HumanBodyBones.LeftRingIntermediate, HumanBodyBones.LeftRingDistal),
+            (HumanBodyBones.LeftLittleIntermediate, HumanBodyBones.LeftLittleDistal),
+        };
+        static readonly (HumanBodyBones middle, HumanBodyBones end)[] RightFingers =
+        {
+            (HumanBodyBones.RightThumbIntermediate, HumanBodyBones.RightThumbDistal), (HumanBodyBones.RightIndexIntermediate, HumanBodyBones.RightIndexDistal),
+            (HumanBodyBones.RightMiddleIntermediate, HumanBodyBones.RightMiddleDistal), (HumanBodyBones.RightRingIntermediate, HumanBodyBones.RightRingDistal),
+            (HumanBodyBones.RightLittleIntermediate, HumanBodyBones.RightLittleDistal),
+        };
 
         void Awake()
         {
@@ -96,6 +117,11 @@ namespace AiWorld.Agents
                 vrm.LookAtTargetType = VRM10ObjectLookAt.LookAtTargetTypes.SpecifiedTransform;
                 vrm.LookAtTarget = eyeTarget;
             }
+            armClearance = new ArmClearance(anim, transform);
+            Live = new LiveMotion(anim, transform);
+            // a body that bends far from its T-pose leaves the bounds Unity keeps for each mesh, and the face and hair
+            // were culled while the body was still in view
+            foreach (var smr in GetComponentsInChildren<SkinnedMeshRenderer>()) smr.updateWhenOffscreen = true;
             BuildCapsules();
             BuildClothProxies();
         }
@@ -256,11 +282,21 @@ namespace AiWorld.Agents
             anim.Play(next, 0, 0f);
         }
 
+        /// <summary>how long a clip of the controller plays (s)</summary>
+        public float ClipSeconds(string clip)
+        {
+            foreach (var c in anim.runtimeAnimatorController.animationClips)
+                if (c.name == clip) return c.length;
+            return 2f;
+        }
+
         /// <summary>play the bed clips mirrored (they are made for the room on the left of someone lying in the bed)</summary>
         public void SetMirror(bool on) => anim.SetBool("Mirror", on);
 
         // ------------------------------------------------------------------ resting on a mattress
 
+        ArmClearance armClearance;
+        float armsClear;
         Transform surface;
         Vector2 surfaceHalf;
         float surfaceTop, lift, nextFit;
@@ -278,6 +314,7 @@ namespace AiWorld.Agents
             surfaceHalf = halfSize;
             surfaceTop = topY;
             nextFit = 0;
+            armClearance.SetSurface(bed, halfSize, topY);
             HairOnSurface(true);
         }
 
@@ -285,6 +322,7 @@ namespace AiWorld.Agents
         {
             surface = null;
             lift = 0;
+            armClearance.SetSurface(null, default, 0f);
             HairOnSurface(false);
         }
 
@@ -328,7 +366,13 @@ namespace AiWorld.Agents
             fitMeshes = new List<(SkinnedMeshRenderer, bool[])>();
             fitMesh = new Mesh();
             var head = anim.GetBoneTransform(HumanBodyBones.Head);
-            bool UnderHead(Transform t) { for (; t; t = t.parent) if (t == head) return true; return false; }
+            var leftArm = anim.GetBoneTransform(HumanBodyBones.LeftUpperArm);
+            var rightArm = anim.GetBoneTransform(HumanBodyBones.RightUpperArm);
+            var leftFoot = anim.GetBoneTransform(HumanBodyBones.LeftFoot);
+            var rightFoot = anim.GetBoneTransform(HumanBodyBones.RightFoot);
+            // (the arms keep themselves on the mattress, see ArmClearance: a hand on the bed must not lift the body. The
+            // feet are lifted onto it by KeepFootOnBed: a thick shoe sole held the whole body 12 cm over the mattress)
+            bool UnderHead(Transform t) { for (; t; t = t.parent) if (t == head || t == leftArm || t == rightArm || t == leftFoot || t == rightFoot) return true; return false; }
             foreach (var smr in GetComponentsInChildren<SkinnedMeshRenderer>())
             {
                 if (!smr.sharedMesh) continue;
@@ -382,18 +426,58 @@ namespace AiWorld.Agents
         }
 
         /// <summary>walking speed for the locomotion blend (m/s)</summary>
-        public void SetSpeed(float metersPerSecond) => anim.SetFloat("Speed", metersPerSecond, 0.15f, Time.deltaTime);
+        public void SetSpeed(float metersPerSecond)
+        {
+            speedNow = metersPerSecond;
+            anim.SetFloat("Speed", metersPerSecond, 0.15f, Time.deltaTime);
+        }
+
+        /// <summary>the body's live motion (see <see cref="LiveMotion"/>)</summary>
+        public LiveMotion Live { get; private set; }
+        /// <summary>standing still with nothing in hand, so live motion can drive the body</summary>
+        public bool StandingFree => standingFor >= 0.6f;
+        /// <summary>on the feet with nothing in hand (it may be walking)</summary>
+        public bool FreeBody => freeBody;
+        float speedNow, standingFor;
+        bool freeBody, trackingClip;
+        float liftEased, liftVelocity, entryOffset, entryVelocity;
+
+        void OnDestroy() => Live?.Dispose();
+
+        void UpdateStanding()
+        {
+            freeBody = state == Locomotion && !surface && !hipsTarget.HasValue && !feetAt.HasValue
+                       && left.goal <= 0f && right.goal <= 0f && left.weight <= 0f && right.weight <= 0f;
+            standingFor = freeBody && speedNow < 0.05f ? standingFor + Time.deltaTime : 0f;
+        }
 
         /// <summary>hold the hips at this world height (on a seat or a mattress); null = let the clip decide</summary>
         public void HoldHipsAt(float? worldY) => hipsTarget = worldY;
 
-        public void Reach(AvatarIKGoal hand, Transform target, Vector3 offset = default)
+        /// <summary>from the wrist to the fingertips (m)</summary>
+        public float HandLength
+        {
+            get
+            {
+                var hand = anim.GetBoneTransform(HumanBodyBones.RightHand);
+                var tip = anim.GetBoneTransform(HumanBodyBones.RightMiddleDistal);
+                return hand && tip ? Vector3.Distance(hand.position, tip.position) : 0.15f;
+            }
+        }
+
+        public void Reach(AvatarIKGoal hand, Transform target, Vector3 offset = default, Vector3? surfaceNormal = null, Vector3 surfacePoint = default)
         {
             var h = hand == AvatarIKGoal.LeftHand ? left : right;
             h.target = target;
             h.offset = offset;
+            h.surfaceNormal = surfaceNormal;
+            h.surfacePoint = surfacePoint;
+            h.push = h.back = h.backGoal = 0f;
             h.goal = target ? 1f : 0f;
         }
+
+        /// <summary>draw a hand straight back off the surface it is on, before <see cref="LetGo"/>: fading out from the handle swept the fingers through the door</summary>
+        public void DrawBack(AvatarIKGoal hand, float meters) => (hand == AvatarIKGoal.LeftHand ? left : right).backGoal = meters;
 
         public void LetGo(AvatarIKGoal hand) => (hand == AvatarIKGoal.LeftHand ? left : right).goal = 0f;
 
@@ -447,7 +531,11 @@ namespace AiWorld.Agents
             Blink();
         }
 
-        static void BlendHand(HandIk h) => h.weight = Mathf.MoveTowards(h.weight, h.target ? h.goal : 0f, Time.deltaTime * 2.2f);
+        static void BlendHand(HandIk h)
+        {
+            h.weight = Mathf.MoveTowards(h.weight, h.target ? h.goal : 0f, Time.deltaTime * 2.2f);
+            h.back = Mathf.MoveTowards(h.back, h.backGoal, Time.deltaTime * 0.7f);
+        }
 
         void OnAnimatorIK(int layer)
         {
@@ -493,16 +581,96 @@ namespace AiWorld.Agents
             }
         }
 
+        float leftFootRise, rightFootRise;
+
+        /// <summary>
+        /// on a bed, a foot the clip puts under the mattress's top is lifted onto it: the leg is solved again after the
+        /// Animator, from the hip, with the knee bending upward. It eases in over the last 8 cm outside the edge, so a
+        /// foot coming in over the edge rises instead of jumping.
+        /// </summary>
+        void KeepFootOnBed(HumanBodyBones upperBone, HumanBodyBones lowerBone, HumanBodyBones footBone, ref float risen)
+        {
+            var upper = anim.GetBoneTransform(upperBone);
+            var lower = anim.GetBoneTransform(lowerBone);
+            var foot = anim.GetBoneTransform(footBone);
+            if (!upper || !lower || !foot) return;
+            var ankle = foot.position;
+            var l = surface.InverseTransformPoint(ankle);
+            float outside = Mathf.Max(Mathf.Abs(l.x) - surfaceHalf.x, Mathf.Abs(l.z) - surfaceHalf.y);
+            float over = Mathf.SmoothStep(0f, 1f, 1f - outside / 0.08f);
+            float want = Mathf.Max(0f, surfaceTop + ankleHeight * 0.9f - ankle.y) * over;
+            risen = Mathf.Lerp(risen, want, 1f - Mathf.Exp(-25f * Time.deltaTime));
+            if (risen < 0.0005f) return;
+
+            var footRotation = foot.rotation;
+            var hip = upper.position;
+            var knee = lower.position;
+            var target = ankle + Vector3.up * risen;
+            float a = (knee - hip).magnitude, b = (ankle - knee).magnitude;
+            var toTarget = target - hip;
+            float d = Mathf.Clamp(toTarget.magnitude, Mathf.Abs(a - b) + 0.001f, a + b - 0.001f);
+            var dir = toTarget.normalized;
+            var pole = Vector3.ProjectOnPlane(knee - hip + Vector3.up * 0.1f, dir).normalized;
+            float along = (a * a - b * b + d * d) / (2f * d);
+            var newKnee = hip + dir * along + pole * Mathf.Sqrt(Mathf.Max(0f, a * a - along * along));
+            upper.rotation = Quaternion.FromToRotation(knee - hip, newKnee - hip) * upper.rotation;
+            lower.rotation = Quaternion.FromToRotation(foot.position - lower.position, hip + dir * d - lower.position) * lower.rotation;
+            foot.rotation = footRotation;
+        }
+
+        /// <summary>
+        /// a hand on a flat thing (a door) lies along it with the palm toward it. The IK only places the wrist, and fingers
+        /// pointing at the surface went through it.
+        /// </summary>
+        void LayHandFlat(HandIk h, HumanBodyBones handBone, HumanBodyBones middle, HumanBodyBones index, HumanBodyBones little, float side)
+        {
+            if (!h.target || !h.surfaceNormal.HasValue || h.weight <= 0f) return;
+            var hand = anim.GetBoneTransform(handBone);
+            var mid = anim.GetBoneTransform(middle);
+            var first = anim.GetBoneTransform(index);
+            var last = anim.GetBoneTransform(little);
+            if (!hand || !mid || !first || !last) return;
+            float w = Mathf.SmoothStep(0f, 1f, h.weight);
+            var normal = h.target.TransformDirection(h.surfaceNormal.Value).normalized;
+            var fingers = (mid.position - hand.position).normalized;
+            var along = Vector3.ProjectOnPlane(fingers, normal);
+            if (along.sqrMagnitude < 1e-4f) return;
+            hand.rotation = Quaternion.Slerp(Quaternion.identity, Quaternion.FromToRotation(fingers, along.normalized), w) * hand.rotation;
+            fingers = (mid.position - hand.position).normalized;
+            var palm = Vector3.Cross(fingers, first.position - last.position).normalized * side;
+            var from = Vector3.ProjectOnPlane(palm, fingers);
+            var to = Vector3.ProjectOnPlane(-normal, fingers);
+            if (from.sqrMagnitude < 1e-4f || to.sqrMagnitude < 1e-4f) return;
+            hand.rotation = Quaternion.Slerp(Quaternion.identity, Quaternion.FromToRotation(from.normalized, to.normalized), w) * hand.rotation;
+
+            // the wrist backs off along the normal until the lowest fingertip is clear (it comes back when there is room)
+            var face = h.target.TransformPoint(h.surfacePoint);
+            float lowest = float.MaxValue;
+            foreach (var (m, e) in side < 0f ? LeftFingers : RightFingers)
+            {
+                var a = anim.GetBoneTransform(m);
+                var b = anim.GetBoneTransform(e);
+                if (!a || !b) continue;
+                var tip = b.position + (b.position - a.position) * 0.9f;
+                lowest = Mathf.Min(lowest, Mathf.Min(Vector3.Dot(tip - face, normal), Vector3.Dot(b.position - face, normal)));
+            }
+            if (lowest < float.MaxValue) h.push = Mathf.Clamp(h.push + (FingerClear - lowest) * 0.5f, 0f, 0.12f);
+        }
+
         void ApplyHand(AvatarIKGoal goal, HandIk h)
         {
+            var elbow = goal == AvatarIKGoal.LeftHand ? AvatarIKHint.LeftElbow : AvatarIKHint.RightElbow;
             if (!h.target || h.weight <= 0f)
             {
                 anim.SetIKPositionWeight(goal, 0);
                 anim.SetIKRotationWeight(goal, 0);
+                anim.SetIKHintPositionWeight(elbow, 0);
                 return;
             }
             float w = Mathf.SmoothStep(0, 1, h.weight);
-            anim.SetIKPosition(goal, h.target.TransformPoint(h.offset));
+            var wrist = h.target.TransformPoint(h.offset);
+            if (h.surfaceNormal.HasValue) wrist += h.target.TransformDirection(h.surfaceNormal.Value).normalized * (h.push + h.back);
+            anim.SetIKPosition(goal, wrist);
             anim.SetIKPositionWeight(goal, w);
             // palm toward the thing, fingers forward
             var shoulder = anim.GetBoneTransform(goal == AvatarIKGoal.LeftHand ? HumanBodyBones.LeftUpperArm : HumanBodyBones.RightUpperArm);
@@ -512,27 +680,75 @@ namespace AiWorld.Agents
                 anim.SetIKRotation(goal, Quaternion.LookRotation(dir, Vector3.up));
                 anim.SetIKRotationWeight(goal, w * 0.5f);
             }
-            anim.SetIKHintPositionWeight(goal == AvatarIKGoal.LeftHand ? AvatarIKHint.LeftElbow : AvatarIKHint.RightElbow, 0);
+            if (surface)
+            {
+                // reaching from lying down, the elbow goes up and out, not down through the mattress
+                var mid = (shoulder.position + h.target.TransformPoint(h.offset)) * 0.5f;
+                var outward = goal == AvatarIKGoal.LeftHand ? -transform.right : transform.right;
+                anim.SetIKHintPosition(elbow, mid + Vector3.up * 0.3f + outward * 0.12f);
+                anim.SetIKHintPositionWeight(elbow, w * 0.7f);
+            }
+            else anim.SetIKHintPositionWeight(elbow, 0);
         }
 
         void LateUpdate()
         {
             if (!hips) return;
-            float want = 0f;
-            if (hipsTarget.HasValue)
+            UpdateStanding();
+            Live.SetHand(true, left.target ? left.target.TransformPoint(left.offset) : Vector3.zero, left.target ? Mathf.SmoothStep(0f, 1f, left.weight) : 0f);
+            Live.SetHand(false, right.target ? right.target.TransformPoint(right.offset) : Vector3.zero, right.target ? Mathf.SmoothStep(0f, 1f, right.weight) : 0f);
+            Live.Apply(StandingFree, freeBody, Time.deltaTime);
+            LayHandFlat(left, HumanBodyBones.LeftHand, HumanBodyBones.LeftMiddleProximal, HumanBodyBones.LeftIndexProximal, HumanBodyBones.LeftLittleProximal, -1f);
+            LayHandFlat(right, HumanBodyBones.RightHand, HumanBodyBones.RightMiddleProximal, HumanBodyBones.RightIndexProximal, HumanBodyBones.RightLittleProximal, 1f);
+            // the arms stay out of the body in every pose: the clips are made on one reference avatar, the outfits differ
+            armsClear = Mathf.MoveTowards(armsClear, 1f, Time.deltaTime / 0.4f);
+            if (armsClear > 0f) armClearance.Apply(Mathf.SmoothStep(0, 1, armsClear), left.weight, right.weight,
+                state != Locomotion || left.goal > 0f || right.goal > 0f || left.weight > 0f || right.weight > 0f, Time.deltaTime);
+            if (surface && !feetAt.HasValue && feetWeight <= 0f)
+            {
+                KeepFootOnBed(HumanBodyBones.LeftUpperLeg, HumanBodyBones.LeftLowerLeg, HumanBodyBones.LeftFoot, ref leftFootRise);
+                KeepFootOnBed(HumanBodyBones.RightUpperLeg, HumanBodyBones.RightLowerLeg, HumanBodyBones.RightFoot, ref rightFootRise);
+            }
+            else leftFootRise = rightFootRise = 0f;
+            float want = 0f, clipOffset = 0f;
+            // (generated motion on a bed already has its height: the model only moves to rest it on the mattress)
+            bool liveOnBed = surface && !hipsTarget.HasValue && Live.Walking && Live.Weight > 0f;
+            if (hipsTarget.HasValue || liveOnBed)
             {
                 // the model moves as a whole, so the hips end up exactly at the target
                 float hipsNow = hips.position.y - hipsOffset;
-                want = hipsTarget.Value - hipsNow;
+                want = clipOffset = hipsTarget.HasValue ? hipsTarget.Value - hipsNow : 0f;
                 if (surface)
                 {
-                    if (Time.time >= nextFit) { nextFit = Time.time + 0.05f; lift = FitLift(want); }
+                    // (every frame while the body is changing pose on the bed, where a tenth of a second is a visible dip)
+                    if (Time.time >= nextFit) { nextFit = Time.time + (OnBedMoving ? 0f : 0.05f); lift = FitLift(want); }
                     want += lift;
                 }
             }
             // a critically damped spring: it starts and stops gently (an exponential ease jumped on the first frames)
             // (on a bed it follows the fitted height closely: lagging behind lets the body dip into the mattress)
-            hipsOffset = Mathf.SmoothDamp(hipsOffset, want, ref hipsVelocity, surface ? 0.12f : 0.28f, Mathf.Infinity, Time.deltaTime);
+            if (surface && (hipsTarget.HasValue || liveOnBed))
+            {
+                // the bed clips carry the hips at very different heights: blending two of them moved the wanted offset by
+                // 80 cm in under a second, and easing after it threw the body 15 cm into the air. So the clip's height is
+                // followed exactly, and only the fit to the mattress and the step onto the bed are eased.
+                if (!trackingClip)
+                {
+                    trackingClip = true;
+                    liftEased = lift;
+                    liftVelocity = entryVelocity = 0f;
+                    entryOffset = hipsOffset - (clipOffset + liftEased);
+                }
+                liftEased = Mathf.SmoothDamp(liftEased, lift, ref liftVelocity, lift > liftEased ? 0.05f : 0.3f, Mathf.Infinity, Time.deltaTime);
+                entryOffset = Mathf.SmoothDamp(entryOffset, 0f, ref entryVelocity, 0.12f, Mathf.Infinity, Time.deltaTime);
+                hipsOffset = clipOffset + liftEased + entryOffset;
+                hipsVelocity = 0f;
+            }
+            else
+            {
+                trackingClip = false;
+                hipsOffset = Mathf.SmoothDamp(hipsOffset, want, ref hipsVelocity, surface ? (want > hipsOffset ? 0.05f : 0.16f) : 0.28f, Mathf.Infinity, Time.deltaTime);
+            }
             var p = transform.localPosition;
             p.y = hipsOffset;
             transform.localPosition = p;
