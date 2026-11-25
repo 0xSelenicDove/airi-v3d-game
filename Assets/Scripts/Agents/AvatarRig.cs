@@ -32,6 +32,9 @@ namespace AiWorld.Agents
         Vector3? feetAt;
         Vector3 feetForward;
         float feetWeight;
+        /// <summary>how fast the feet go over to their planted place (weight per second): at once, a walking stance jumped 25 degrees at the knee</summary>
+        float feetRate = FeetSlow;
+        const float FeetSlow = 1.6f, FeetQuick = 6f;
         float ankleHeight = 0.08f, thighLength = 0.4f, shinLength = 0.4f, hipWidth = 0.18f;
         Vector3? lookAt;
         float lookWeight;
@@ -79,6 +82,8 @@ namespace AiWorld.Agents
 
         /// <summary>how far fingertip joints stay off a surface they rest on (m): a finger is about this thick</summary>
         const float FingerClear = 0.014f;
+        /// <summary>lying down, a hand reaches at most this share of the arm's length, so the elbow never locks straight</summary>
+        const float LyingReach = 0.93f;
         static readonly (HumanBodyBones middle, HumanBodyBones end)[] LeftFingers =
         {
             (HumanBodyBones.LeftThumbIntermediate, HumanBodyBones.LeftThumbDistal), (HumanBodyBones.LeftIndexIntermediate, HumanBodyBones.LeftIndexDistal),
@@ -300,7 +305,7 @@ namespace AiWorld.Agents
         Transform surface;
         Vector2 surfaceHalf;
         float surfaceTop, lift, nextFit;
-        List<(SkinnedMeshRenderer smr, bool[] skip)> fitMeshes;
+        List<(SkinnedMeshRenderer smr, bool[] skip, bool[] onHead)> fitMeshes;
         Mesh fitMesh;
 
         /// <summary>
@@ -314,6 +319,9 @@ namespace AiWorld.Agents
             surfaceHalf = halfSize;
             surfaceTop = topY;
             nextFit = 0;
+            pillow = null;
+            foreach (var r in bed.GetComponentsInChildren<Renderer>())
+                if (r.name.Contains("Pillow") && Vector3.Distance(r.bounds.center, bed.position) < 1.5f) { pillow = r.bounds; break; }
             armClearance.SetSurface(bed, halfSize, topY);
             HairOnSurface(true);
         }
@@ -327,15 +335,38 @@ namespace AiWorld.Agents
         }
 
         VRM10SpringBoneColliderGroup surfaceGroup;
+        bool springsReady, hairOnSurface;
+        /// <summary>how far over the mattress the hair's plane is (m): the hair is thicker than its chain of joints</summary>
+        const float HairOverSurface = 0.03f;
+        /// <summary>where the hair's plane and pillow wait while no bed is in use: far below the floor</summary>
+        const float PlaneAway = -100f;
+        /// <summary>
+        /// the plane comes up from this far under the mattress's top, this fast (m, m/s), once the body is on the bed.
+        /// Put straight at the top while standing beside the bed, it threw a coat's hem up 40 cm in one frame.
+        /// </summary>
+        const float PlaneRiseFrom = 0.25f, PlaneRise = 0.6f;
+        float planeY = PlaneAway;
+        /// <summary>the pillow, for the hair: capsules side by side across the bed, over its top</summary>
+        readonly List<Transform> pillowCapsules = new();
+        const int PillowCapsules = 3;
+        Bounds? pillow;
 
         /// <summary>
-        /// the hair's spring bones collide with the body only, so long hair fell through the mattress: while on a bed,
-        /// every spring also collides with a plane at the mattress's top
+        /// once, before anything moves: every spring (hair, skirt, hood) collides with a plane that lies on the mattress's
+        /// top while on a bed, and simulates in world space.
+        /// Rebuilding the springs later throws away where they are (UniVRM keeps their state in the buffer it replaces),
+        /// so adding the plane on getting into bed flung the hair 20 to 65 cm in one frame. And VRoid simulates each
+        /// spring relative to the model's root: the bed clips turn the root 90 degrees at once under a still body, and
+        /// the hair swung as if the body had turned.
         /// </summary>
-        void HairOnSurface(bool on)
+        void SetUpSprings()
         {
-            if (!vrm || vrm.SpringBone == null) return;
-            if (on && !surfaceGroup)
+            if (!vrm || vrm.SpringBone == null || vrm.Runtime?.SpringBone == null)
+            {
+                springsReady = true;
+                return;
+            }
+            if (!surfaceGroup)
             {
                 var go = new GameObject("Mattress Plane (hair)");
                 go.transform.SetParent(transform, false);
@@ -345,25 +376,72 @@ namespace AiWorld.Agents
                 surfaceGroup = go.AddComponent<VRM10SpringBoneColliderGroup>();
                 surfaceGroup.Name = "mattress";
                 surfaceGroup.Colliders.Add(c);
+                for (int i = 0; i < PillowCapsules; i++)
+                {
+                    var p = new GameObject($"Pillow Capsule {i} (hair)");
+                    p.transform.SetParent(go.transform, false);
+                    var pc = p.AddComponent<VRM10SpringBoneCollider>();
+                    pc.ColliderType = VRM10SpringBoneColliderTypes.Capsule;
+                    surfaceGroup.Colliders.Add(pc);
+                    pillowCapsules.Add(p.transform);
+                }
+                PlaceSurfacePlane();
             }
-            if (!surfaceGroup) return;
-            PlaceSurfacePlane();
             foreach (var spring in vrm.SpringBone.Springs)
             {
-                if (on && !spring.ColliderGroups.Contains(surfaceGroup)) spring.ColliderGroups.Add(surfaceGroup);
-                if (!on) spring.ColliderGroups.Remove(surfaceGroup);
+                spring.Center = null;
+                if (!spring.ColliderGroups.Contains(surfaceGroup)) spring.ColliderGroups.Add(surfaceGroup);
             }
-            vrm.Runtime?.SpringBone?.ReconstructSpringBone();
+            // while UniVRM still builds the springs it first made, a rebuild is refused: try again next frame
+            springsReady = vrm.Runtime.SpringBone.ReconstructSpringBone();
+            if (springsReady) Debug.Log($"[AvatarRig] {name}: {vrm.SpringBone.Springs.Count} springs in world space, with the bed's plane");
+        }
+
+        /// <summary>the hair's spring bones collide with the body only, so long hair fell through the mattress</summary>
+        void HairOnSurface(bool on)
+        {
+            hairOnSurface = on;
+            PlaceSurfacePlane();
         }
 
         void PlaceSurfacePlane()
         {
-            if (surfaceGroup) surfaceGroup.transform.SetPositionAndRotation(new Vector3(transform.position.x, surfaceTop + 0.01f, transform.position.z), Quaternion.identity);
+            if (!surfaceGroup) return;
+            bool on = hairOnSurface && (Lying || OnBedMoving);
+            if (!on) planeY = PlaneAway;
+            else if (planeY < surfaceTop - PlaneRiseFrom) planeY = surfaceTop - PlaneRiseFrom;
+            else planeY = Mathf.MoveTowards(planeY, surfaceTop + HairOverSurface, PlaneRise * Time.deltaTime);
+            surfaceGroup.transform.SetPositionAndRotation(new Vector3(transform.position.x, planeY, transform.position.z), Quaternion.identity);
+            // the pillow's capsules lie over its top, across the bed, and come up with the plane
+            for (int i = 0; i < pillowCapsules.Count; i++)
+            {
+                var c = pillowCapsules[i].GetComponent<VRM10SpringBoneCollider>();
+                if (!on || !pillow.HasValue || !surface)
+                {
+                    pillowCapsules[i].position = new Vector3(transform.position.x, PlaneAway, transform.position.z);
+                    c.Offset = c.Tail = Vector3.zero;
+                    continue;
+                }
+                var b = pillow.Value;
+                float radius = b.extents.y;
+                var across = surface.right;
+                var along = surface.forward;
+                float alongHalf = Mathf.Abs(Vector3.Dot(b.extents, new Vector3(Mathf.Abs(along.x), Mathf.Abs(along.y), Mathf.Abs(along.z))));
+                float acrossHalf = Mathf.Abs(Vector3.Dot(b.extents, new Vector3(Mathf.Abs(across.x), Mathf.Abs(across.y), Mathf.Abs(across.z))));
+                float k = PillowCapsules > 1 ? i / (PillowCapsules - 1f) * 2f - 1f : 0f;
+                // as high as the plane has come up, at most the pillow's own place
+                float rise = Mathf.Clamp01((planeY - (surfaceTop - PlaneRiseFrom)) / (PlaneRiseFrom + HairOverSurface));
+                var centre = b.center + along * (k * (alongHalf - radius)) + Vector3.down * ((1f - rise) * (b.max.y - surfaceTop + PlaneRiseFrom));
+                pillowCapsules[i].SetPositionAndRotation(centre, Quaternion.identity);
+                c.Radius = radius;
+                c.Offset = -across * (acrossHalf - radius);
+                c.Tail = across * (acrossHalf - radius);
+            }
         }
 
         void BuildFitMeshes()
         {
-            fitMeshes = new List<(SkinnedMeshRenderer, bool[])>();
+            fitMeshes = new List<(SkinnedMeshRenderer, bool[], bool[])>();
             fitMesh = new Mesh();
             var head = anim.GetBoneTransform(HumanBodyBones.Head);
             var leftArm = anim.GetBoneTransform(HumanBodyBones.LeftUpperArm);
@@ -373,19 +451,23 @@ namespace AiWorld.Agents
             // (the arms keep themselves on the mattress, see ArmClearance: a hand on the bed must not lift the body. The
             // feet are lifted onto it by KeepFootOnBed: a thick shoe sole held the whole body 12 cm over the mattress)
             bool UnderHead(Transform t) { for (; t; t = t.parent) if (t == head || t == leftArm || t == rightArm || t == leftFoot || t == rightFoot) return true; return false; }
+            bool IsHead(Transform t) { for (; t; t = t.parent) if (t == head) return true; return false; }
             foreach (var smr in GetComponentsInChildren<SkinnedMeshRenderer>())
             {
                 if (!smr.sharedMesh) continue;
                 var bones = smr.bones;
                 var weights = smr.sharedMesh.boneWeights;
                 var skip = new bool[smr.sharedMesh.vertexCount];
+                var onHead = new bool[skip.Length];
                 // hair and anything else on the head lies where it falls; the body is what rests on the bed
+                // (the head itself rests on what is under it: see RaiseHead)
                 for (int i = 0; i < skip.Length && i < weights.Length; i++)
                 {
                     int b = weights[i].boneIndex0;
                     skip[i] = b >= 0 && b < bones.Length && UnderHead(bones[b]);
+                    onHead[i] = b >= 0 && b < bones.Length && IsHead(bones[b]);
                 }
-                fitMeshes.Add((smr, skip));
+                fitMeshes.Add((smr, skip, onHead));
             }
         }
 
@@ -403,7 +485,9 @@ namespace AiWorld.Agents
                 return surfaceTop - (bevel - Mathf.Sqrt(bevel * bevel - e * e));
             }
             float need = float.MinValue;
-            foreach (var (smr, skip) in fitMeshes)
+            headNeed = 0f;
+            var headAt = headBone ? headBone.position : hips.position;
+            foreach (var (smr, skip, onHead) in fitMeshes)
             {
                 if (!smr || !smr.enabled) continue;
                 smr.BakeMesh(fitMesh, true);
@@ -411,7 +495,19 @@ namespace AiWorld.Agents
                 var verts = fitMesh.vertices;
                 for (int v = 0; v < verts.Length; v += 2)
                 {
-                    if (v < skip.Length && skip[v]) continue;
+                    if (v < skip.Length && skip[v])
+                    {
+                        // the back of the head and the hair on it (not long hair spread down the back)
+                        if (!Lying || v >= onHead.Length || !onHead[v]) continue;
+                        var h = m.MultiplyPoint3x4(verts[v]);
+                        if ((h - headAt).sqrMagnitude > HeadReach * HeadReach) continue;
+                        var hl = surface.InverseTransformPoint(h);
+                        float under = pillow is Bounds pb && h.x > pb.min.x && h.x < pb.max.x && h.z > pb.min.z && h.z < pb.max.z
+                            ? pb.max.y - PillowGive
+                            : Mathf.Abs(hl.x) <= surfaceHalf.x && Mathf.Abs(hl.z) <= surfaceHalf.y ? SurfaceAt(hl) : float.MinValue;
+                        headNeed = Mathf.Max(headNeed, under + 0.004f - h.y);
+                        continue;
+                    }
                     var w = m.MultiplyPoint3x4(verts[v]);
                     if (w.y > surfaceTop + 0.05f) continue;
                     var l = surface.InverseTransformPoint(w);
@@ -503,7 +599,7 @@ namespace AiWorld.Agents
             feetForward = new Vector3(forward.x, 0, forward.z).normalized;
             feetAt = new Vector3(c.x, floorY + ankleHeight, c.z);
             lastFeet = feetAt.Value;
-            feetWeight = 1f;
+            feetRate = FeetQuick;
         }
 
         public void PlantFeet(Vector3? hipsOnSeat, Vector3 forward = default, float floorY = 0f)
@@ -517,11 +613,176 @@ namespace AiWorld.Agents
             else feetAt = null;
         }
 
+        /// <summary>plant both feet where they stood before (<see cref="ShoesAt"/>, say), side by side, toes forward</summary>
+        public void PlantFeetAt(Vector3 feet, Vector3 forward)
+        {
+            feetForward = new Vector3(forward.x, 0, forward.z).normalized;
+            feetAt = feet;
+        }
+
+        /// <summary>move one planted foot this far from its place (stepping out of a shoe, say). It goes back to its place once the feet are let go.</summary>
+        public void ShiftFoot(bool left, Vector3 offset) => footShift[left ? 0 : 1] = offset;
+
+        readonly Vector3[] footShift = new Vector3[2];
+
+        // ------------------------------------------------------------------ shoes
+
+        /// <summary>
+        /// VRoid merges the shoes into the outfit, so a shoe is the outfit's triangles that are all skinned to one foot
+        /// (its foot or toe bone). The body's own bare feet are under them.
+        /// </summary>
+        class ShoeParts
+        {
+            public SkinnedMeshRenderer smr;
+            public Mesh worn;
+            public int submesh;
+            public int[] keep;
+            public int[][] shoe;
+        }
+
+        ShoeParts shoes;
+        bool shoesSearched;
+        readonly GameObject[] droppedShoes = new GameObject[2];
+        readonly bool[] shoeOff = new bool[2];
+
+        /// <summary>where the planted feet were when the shoes came off: put them on again there</summary>
+        public Vector3? ShoesAt { get; private set; }
+
+        /// <summary>the outfit has shoes that can come off (one for each foot, apart from the body's own skin)</summary>
+        public bool HasShoes
+        {
+            get
+            {
+                FindShoes();
+                return shoes != null;
+            }
+        }
+
+        void FindShoes()
+        {
+            if (shoesSearched) return;
+            shoesSearched = true;
+            var feet = new[]
+            {
+                new[] { anim.GetBoneTransform(HumanBodyBones.LeftFoot), anim.GetBoneTransform(HumanBodyBones.LeftToes) },
+                new[] { anim.GetBoneTransform(HumanBodyBones.RightFoot), anim.GetBoneTransform(HumanBodyBones.RightToes) },
+            };
+            foreach (var smr in GetComponentsInChildren<SkinnedMeshRenderer>())
+            {
+                var mesh = smr.sharedMesh;
+                if (!mesh || mesh.subMeshCount < 2) continue;
+                var materials = smr.sharedMaterials;
+                var weights = mesh.boneWeights;
+                var bones = smr.bones;
+                int Side(int v)
+                {
+                    int b = weights[v].boneIndex0;
+                    if (b < 0 || b >= bones.Length || !bones[b]) return -1;
+                    return System.Array.IndexOf(feet[0], bones[b]) >= 0 ? 0 : System.Array.IndexOf(feet[1], bones[b]) >= 0 ? 1 : -1;
+                }
+                for (int s = 0; s < mesh.subMeshCount; s++)
+                {
+                    // the body's own skin stays: the bare feet are in it
+                    if (s >= materials.Length || !materials[s] || materials[s].name.Contains("SKIN")) continue;
+                    var tris = mesh.GetTriangles(s);
+                    var keep = new List<int>();
+                    var shoe = new[] { new List<int>(), new List<int>() };
+                    for (int i = 0; i < tris.Length; i += 3)
+                    {
+                        int a = Side(tris[i]);
+                        var to = a >= 0 && a == Side(tris[i + 1]) && a == Side(tris[i + 2]) ? shoe[a] : keep;
+                        to.Add(tris[i]);
+                        to.Add(tris[i + 1]);
+                        to.Add(tris[i + 2]);
+                    }
+                    if (shoe[0].Count == 0 || shoe[1].Count == 0) continue;
+                    shoes = new ShoeParts { smr = smr, submesh = s, keep = keep.ToArray(), shoe = new[] { shoe[0].ToArray(), shoe[1].ToArray() } };
+                    Debug.Log($"[AvatarRig] {name}: shoes in {smr.name} ({materials[s].name}), {shoe[0].Count / 3} and {shoe[1].Count / 3} triangles");
+                    return;
+                }
+            }
+            Debug.Log($"[AvatarRig] {name}: no shoes found that can come off");
+        }
+
+        /// <summary>a shoe comes off: a copy of it, as it is now, stays where it stands, and the body's one is hidden</summary>
+        public void DropShoe(bool left)
+        {
+            FindShoes();
+            int s = left ? 0 : 1;
+            if (shoes == null || shoeOff[s]) return;
+            if (!ShoesAt.HasValue) ShoesAt = feetAt ?? lastFeet;
+            var baked = new Mesh();
+            shoes.smr.BakeMesh(baked, true);
+            var verts = baked.vertices;
+            var normals = baked.normals;
+            var uv = baked.uv;
+            var map = new Dictionary<int, int>();
+            var nv = new List<Vector3>();
+            var nn = new List<Vector3>();
+            var nu = new List<Vector2>();
+            var nt = new List<int>();
+            foreach (var v in shoes.shoe[s])
+            {
+                if (!map.TryGetValue(v, out int j))
+                {
+                    j = nv.Count;
+                    map[v] = j;
+                    nv.Add(verts[v]);
+                    nn.Add(normals[v]);
+                    nu.Add(uv[v]);
+                }
+                nt.Add(j);
+            }
+            Destroy(baked);
+            var mesh = new Mesh { name = left ? "Left Shoe" : "Right Shoe" };
+            mesh.SetVertices(nv);
+            mesh.SetNormals(nn);
+            mesh.SetUVs(0, nu);
+            mesh.SetTriangles(nt, 0);
+            mesh.RecalculateBounds();
+            // in the scene itself: under the character, the shoes turned with it when it swung its legs onto the bed,
+            // into the bed's frame
+            var go = new GameObject($"{name} {mesh.name}");
+            go.transform.SetPositionAndRotation(shoes.smr.transform.position, shoes.smr.transform.rotation);
+            go.AddComponent<MeshFilter>().sharedMesh = mesh;
+            go.AddComponent<MeshRenderer>().sharedMaterial = shoes.smr.sharedMaterials[shoes.submesh];
+            droppedShoes[s] = go;
+            shoeOff[s] = true;
+            UpdateWornShoes();
+        }
+
+        /// <summary>the foot is back in its shoe: the one on the floor goes, and the body's one shows again</summary>
+        public void WearShoe(bool left)
+        {
+            int s = left ? 0 : 1;
+            if (shoes == null || !shoeOff[s]) return;
+            if (droppedShoes[s]) Destroy(droppedShoes[s]);
+            droppedShoes[s] = null;
+            shoeOff[s] = false;
+            if (!shoeOff[0] && !shoeOff[1]) ShoesAt = null;
+            UpdateWornShoes();
+        }
+
+        void UpdateWornShoes()
+        {
+            // the body's mesh becomes this avatar's own copy the first time a shoe comes off
+            if (!shoes.worn)
+            {
+                shoes.worn = Instantiate(shoes.smr.sharedMesh);
+                shoes.smr.sharedMesh = shoes.worn;
+            }
+            var tris = new List<int>(shoes.keep);
+            for (int s = 0; s < 2; s++) if (!shoeOff[s]) tris.AddRange(shoes.shoe[s]);
+            shoes.worn.SetTriangles(tris, shoes.submesh);
+        }
+
         void Update()
         {
             BlendHand(left);
             BlendHand(right);
-            feetWeight = Mathf.MoveTowards(feetWeight, feetAt.HasValue ? 1f : 0f, Time.deltaTime * 1.6f);
+            feetWeight = Mathf.MoveTowards(feetWeight, feetAt.HasValue ? 1f : 0f, Time.deltaTime * feetRate);
+            if (feetWeight >= 1f || feetWeight <= 0f) feetRate = FeetSlow;
+            if (!feetAt.HasValue && feetWeight <= 0f) footShift[0] = footShift[1] = Vector3.zero;
             clothFade = Mathf.MoveTowards(clothFade, clothFadeTarget, Time.deltaTime * clothFadeRate);
             lookWeight = Mathf.MoveTowards(lookWeight, lookAt.HasValue ? 1f : 0f, Time.deltaTime * 1.5f);
             // the eyes and head follow one target that moves smoothly, also back to looking ahead (or up, lying down):
@@ -572,7 +833,7 @@ namespace AiWorld.Agents
                 anim.SetIKPositionWeight(goal, w);
                 anim.SetIKRotationWeight(goal, w);
                 if (w <= 0f) { anim.SetIKHintPositionWeight(hint, 0); continue; }
-                var foot = lastFeet + right * (side * hipWidth * 0.5f);
+                var foot = lastFeet + right * (side * hipWidth * 0.5f) + footShift[side < 0f ? 0 : 1];
                 anim.SetIKPosition(goal, foot);
                 anim.SetIKRotation(goal, rot);
                 // the knees point forward over the feet
@@ -670,22 +931,43 @@ namespace AiWorld.Agents
             float w = Mathf.SmoothStep(0, 1, h.weight);
             var wrist = h.target.TransformPoint(h.offset);
             if (h.surfaceNormal.HasValue) wrist += h.target.TransformDirection(h.surfaceNormal.Value).normalized * (h.push + h.back);
+            var shoulder = anim.GetBoneTransform(goal == AvatarIKGoal.LeftHand ? HumanBodyBones.LeftUpperArm : HumanBodyBones.RightUpperArm);
+            if (surface)
+            {
+                // lying down, the quilt's edge rises out of reach as it turns over. A straight arm has no defined roll,
+                // so it snapped 40 to 50 degrees the moment it locked: the hand stays just within reach instead
+                var lowerArm = anim.GetBoneTransform(goal == AvatarIKGoal.LeftHand ? HumanBodyBones.LeftLowerArm : HumanBodyBones.RightLowerArm);
+                var handBone = anim.GetBoneTransform(goal == AvatarIKGoal.LeftHand ? HumanBodyBones.LeftHand : HumanBodyBones.RightHand);
+                float armLength = Vector3.Distance(shoulder.position, lowerArm.position) + Vector3.Distance(lowerArm.position, handBone.position);
+                wrist = shoulder.position + Vector3.ClampMagnitude(wrist - shoulder.position, armLength * LyingReach);
+            }
             anim.SetIKPosition(goal, wrist);
             anim.SetIKPositionWeight(goal, w);
-            // palm toward the thing, fingers forward
-            var shoulder = anim.GetBoneTransform(goal == AvatarIKGoal.LeftHand ? HumanBodyBones.LeftUpperArm : HumanBodyBones.RightUpperArm);
+            // palm toward the thing, fingers forward. On the bed, only the level part of that direction: the quilt's
+            // edge rises above the shoulder as it turns over, the direction points almost straight up, the roll of a
+            // rotation looking along it is undefined, and the forearm snapped 60 to 75 degrees in one frame. With no
+            // rotation at all, the fingers kept the clip's and went 11 cm into the mattress.
             var dir = h.target.position - shoulder.position;
+            if (surface)
+            {
+                var outward = goal == AvatarIKGoal.LeftHand ? -transform.right : transform.right;
+                var level = Vector3.ProjectOnPlane(dir, Vector3.up);
+                float share = dir.sqrMagnitude > 1e-6f ? level.magnitude / dir.magnitude : 0f;
+                dir = Vector3.Slerp(outward, level.sqrMagnitude > 1e-6f ? level.normalized : outward, Mathf.InverseLerp(0.1f, 0.4f, share));
+            }
             if (dir.sqrMagnitude > 1e-4f)
             {
                 anim.SetIKRotation(goal, Quaternion.LookRotation(dir, Vector3.up));
                 anim.SetIKRotationWeight(goal, w * 0.5f);
             }
+            else anim.SetIKRotationWeight(goal, 0);
             if (surface)
             {
-                // reaching from lying down, the elbow goes up and out, not down through the mattress
-                var mid = (shoulder.position + h.target.TransformPoint(h.offset)) * 0.5f;
+                // reaching from lying down, the elbow goes out from the shoulder and a little up, not down through the
+                // mattress. The place is fixed to the body: one taken from the middle of the reach plus "up" lay almost
+                // on the shoulder-to-hand line under the quilt's rising edge, and the elbow flipped over as it moved.
                 var outward = goal == AvatarIKGoal.LeftHand ? -transform.right : transform.right;
-                anim.SetIKHintPosition(elbow, mid + Vector3.up * 0.3f + outward * 0.12f);
+                anim.SetIKHintPosition(elbow, shoulder.position + outward * 0.3f + Vector3.up * 0.15f);
                 anim.SetIKHintPositionWeight(elbow, w * 0.7f);
             }
             else anim.SetIKHintPositionWeight(elbow, 0);
@@ -694,6 +976,7 @@ namespace AiWorld.Agents
         void LateUpdate()
         {
             if (!hips) return;
+            if (!springsReady) SetUpSprings();
             UpdateStanding();
             Live.SetHand(true, left.target ? left.target.TransformPoint(left.offset) : Vector3.zero, left.target ? Mathf.SmoothStep(0f, 1f, left.weight) : 0f);
             Live.SetHand(false, right.target ? right.target.TransformPoint(right.offset) : Vector3.zero, right.target ? Mathf.SmoothStep(0f, 1f, right.weight) : 0f);
@@ -752,9 +1035,44 @@ namespace AiWorld.Agents
             var p = transform.localPosition;
             p.y = hipsOffset;
             transform.localPosition = p;
+            headLift = Mathf.SmoothDamp(headLift, surface && Lying ? headNeed : 0f, ref headLiftVelocity, 0.15f, Mathf.Infinity, Time.deltaTime);
+            if (headLift > 0.001f) RaiseHead(headLift);
             if (surface) PlaceSurfacePlane();
             UpdateClothProxies();
         }
+
+        /// <summary>
+        /// lying down, the head rests on what is under it (the pillow, or the mattress): the chest, neck and head bend
+        /// it up by this much (m). The body is fitted to the mattress with the head left out, and the back of the head
+        /// and its hair were in the mattress, or in the pillow once the head lay on it.
+        /// </summary>
+        void RaiseHead(float amount)
+        {
+            var chest = anim.GetBoneTransform(HumanBodyBones.UpperChest) ?? anim.GetBoneTransform(HumanBodyBones.Chest);
+            var neck = anim.GetBoneTransform(HumanBodyBones.Neck);
+            if (!chest || !neck || !headBone) return;
+            var axis = Vector3.Cross(headBone.position - chest.position, Vector3.up);
+            if (axis.sqrMagnitude < 1e-6f) return;
+            axis.Normalize();
+            // how far the head rises for each radian, shared out: the chest turns most, the head least
+            float lever = 0.5f * Vector3.Distance(chest.position, headBone.position) + 0.35f * Vector3.Distance(neck.position, headBone.position) + 0.15f * 0.08f;
+            float angle = Mathf.Min(amount / lever * Mathf.Rad2Deg, MaxHeadRaise);
+            var turn = Quaternion.AngleAxis(angle * 0.5f, axis);
+            chest.rotation = turn * chest.rotation;
+            // the arms hang from the chest: turned with it, the hands went 7 to 15 cm into the mattress, so the
+            // shoulders turn back
+            foreach (var s in new[] { HumanBodyBones.LeftShoulder, HumanBodyBones.RightShoulder })
+            {
+                var shoulder = anim.GetBoneTransform(s);
+                if (shoulder) shoulder.rotation = Quaternion.Inverse(turn) * shoulder.rotation;
+            }
+            neck.rotation = Quaternion.AngleAxis(angle * 0.35f, axis) * neck.rotation;
+            headBone.rotation = Quaternion.AngleAxis(angle * 0.15f, axis) * headBone.rotation;
+        }
+
+        float headNeed, headLift, headLiftVelocity;
+        /// <summary>the head's part of the mesh: within this of the head bone (m); how far the head sinks into a pillow (m); the most it bends up (degrees)</summary>
+        const float HeadReach = 0.16f, PillowGive = 0.025f, MaxHeadRaise = 40f;
 
         void Blink()
         {

@@ -2,7 +2,10 @@
 
 [ARDY](https://github.com/nv-tlabs/ardy) generates a character's standing, gestures, walking, running, sitting, standing up, and getting in and out of bed while the game runs. The game works without it.
 
+The game's default motion server is now [Kimodo](../kimodo/README.md#live-motion). Start the game with `-motion ardy` to use ARDY instead.
+
 - `ardy_server.py` streams motion to the game over a WebSocket on `127.0.0.1:8791`. Each character gets its own stream.
+- `plans.py` holds what the ARDY and Kimodo servers share: the bone map, the walk and furniture plans, and the anchor that keeps a standing character on its spot.
 - `encode_prompts.py` encodes the prompts in `prompts.json` once, on the CPU, in the [Kimodo](https://github.com/nv-tlabs/kimodo) environment.
 - `Assets/Scripts/Agents/LiveMotion.cs` plays the stream over the Animator's pose.
 
@@ -24,13 +27,13 @@ The text model needs about 16 GB of RAM. It runs only here, and prompts already 
 python ardy_server.py --checkpoints CHECKPOINTS_DIR --text-cache TEXT_CACHE/prompts.npz
 ```
 
-Then start the game. It connects by itself and retries every 5 seconds. To use another address, start the game with `-ardy ws://127.0.0.1:PORT`. To turn live motion off, use `-ardy off`.
+Then start the game with `-motion ardy`. It connects by itself and retries every 5 seconds. To use another address, start the game with `-motion ws://127.0.0.1:PORT`. To turn live motion off, use `-motion off`.
 
 AIRI can play a gesture with `act`, type `gesture`, using a name from `world_status`. With `act`, type `interact`, `run: true` makes the character run there when the way is at least 3 m.
 
 ## Gestures
 
-Most gestures are ARDY prompts in `prompts.json`, for example `squat`, `raise_arms`, `raise_left_arm`, `raise_right_arm` and `arms_forward`. Two are done in the game, over the generated standing body:
+Most gestures are prompts in `prompts.json`, for example `squat`, `raise_arms`, `raise_left_arm`, `raise_right_arm` and `arms_forward`. ARDY and Kimodo use the same list. Two are done in the game, over the generated standing body:
 
 - `look_left` and `look_right` turn the neck and head 60 degrees. ARDY ignored "turn the head", and "look over the shoulder" turned the whole body.
 - `swing_arms` swings the arms front to back in turn. The arm swing prompts left the arms still, or swung them out and across.

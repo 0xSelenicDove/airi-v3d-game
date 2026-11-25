@@ -19,6 +19,11 @@ namespace AiWorld.Agents
         /// <summary>how far an elbow can swing out of the body while the hand is on something (degrees)</summary>
         const float MaxSwivel = 75f;
         /// <summary>
+        /// the elbow's distance from the shoulder-to-wrist line (m): below the first the swing does nothing, and it is in
+        /// full from the second. A point closer than <see cref="OnLine"/> to the line is not tested.
+        /// </summary>
+        const float StraightFrom = 0.02f, StraightTo = 0.06f, OnLine = 0.01f;
+        /// <summary>
         /// off the bed, how far a free arm is turned out of the body (degrees). A loose jacket measures wide, and clearing
         /// all of it holds the arms out like a scarecrow: a sleeve brushing soft cloth looks far more natural.
         /// </summary>
@@ -226,13 +231,18 @@ namespace AiWorld.Agents
                     var push = PushOut(p, radius, a.side, thighs);
                     if (push.sqrMagnitude < 1e-7f) return;
                     var centre = s + axis * Vector3.Dot(p - s, axis);
+                    // a point on the line does not move when the arm turns about it
+                    if ((p - centre).sqrMagnitude < OnLine * OnLine) return;
                     float angle = Vector3.SignedAngle(p - centre, Vector3.ProjectOnPlane(p + push - centre, axis), axis);
                     if (Mathf.Abs(angle) > Mathf.Abs(want)) want = angle;
                 }
                 Test(e, a.upperRadius, false);
                 Test((s + e) * 0.5f, a.upperRadius, false);
                 Test((e + w) * 0.5f, a.lowerRadius, true);
-                want = Mathf.Clamp(want * 1.15f, -MaxSwivel, MaxSwivel);
+                // turning a nearly straight arm about the line only rolls it: the angle came from tiny offsets, swapped
+                // sign from frame to frame, and twitched the arm 20 to 30 degrees while it reached for the quilt
+                float bend = (e - (s + axis * Vector3.Dot(e - s, axis))).magnitude;
+                want = Mathf.Clamp(want * 1.15f, -MaxSwivel, MaxSwivel) * Mathf.InverseLerp(StraightFrom, StraightTo, bend);
             }
             float rate = Mathf.Abs(want) > Mathf.Abs(a.swivel) ? Attack : Release;
             a.swivel = Mathf.Lerp(a.swivel, want, 1f - Mathf.Exp(-rate * dt));

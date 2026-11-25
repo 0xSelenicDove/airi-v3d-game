@@ -87,7 +87,7 @@ AIRI ⇄ MCP (stdio or HTTP) ⇄ bridge/airi-mcp.mjs ⇄ WebSocket (127.0.0.1:87
 - While AIRI is connected, Airi waits for AIRI's next action. When AIRI gives no action for 60 s, Airi's own brain decides that one thing (autopilot), and AIRI gets an `autopilot` event. When AIRI disconnects, Airi goes back to her own brain.
 - `AiriLink` adds itself when the scene starts ([`Assets/Scripts/Airi`](Assets/Scripts/Airi)). Set its address and autopilot time on the component, or start a player build with `-airi-bridge ws://127.0.0.1:<port>` and `-airi-autopilot <seconds>`.
 - The bridge listens only on 127.0.0.1. It accepts the game, which sends no `Origin` header, and web pages only from this computer.
-- `act` can play a `gesture` while Airi stands still and the [live motion server](tools/ardy/README.md) runs. With `interact`, `run: true` makes her run there. Emotions and speech are not in the Unity version yet.
+- `act` can play a `gesture` while Airi stands still and the live motion server runs: [Kimodo](tools/kimodo/README.md#live-motion) by default, or [ARDY](tools/ardy/README.md). With Kimodo, the gesture can also be a `motion` that Airi describes in English. With `interact`, `run: true` makes her run there. Emotions and speech are not in the Unity version yet.
 
 ## Project layout
 
@@ -101,7 +101,7 @@ AIRI ⇄ MCP (stdio or HTTP) ⇄ bridge/airi-mcp.mjs ⇄ WebSocket (127.0.0.1:87
 | `Assets/Scripts/Airi` | `AiriLink` (the game's end of the AIRI bridge) and `AiriBrain` (Airi's brain while AIRI is connected) |
 | `bridge/` | The AIRI MCP bridge (Node), see AIRI in the world |
 | `art/` | Blender sources and the Kenney furniture kit used by the web version |
-| `tools/kimodo` | Scripts that make motion clips with NVIDIA's Kimodo (`.vrma`) |
+| `tools/kimodo` | The Kimodo live motion server, and scripts that make motion clips with Kimodo (`.vrma`) |
 
 ### Motion capture
 

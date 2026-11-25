@@ -141,7 +141,9 @@ namespace AiWorld.Airi
             ["others"] = new JArray(Others().Select(a => new JObject { ["name"] = a.displayName, ["doing"] = a.Doing, ["place"] = Place(a) })),
             ["gestures"] = new JArray(Character.rig.Live.Gestures.Select(g => new JValue(g))),
             ["emotions"] = new JArray(),
-            ["note"] = "Unity version: act can interact (with run: true to run there), say (the words show above your head), wait, and gesture while standing still when the live motion server runs (gestures is then not empty). Emotions, speech and small talk are not ported yet.",
+            ["note"] = "Unity version: act can interact (with run: true to run there), say (the words show above your head), wait, and gesture while standing still when the live motion server runs (gestures is then not empty)."
+                + (Character.rig.Live.Texts ? " A gesture can also be a motion you describe in English (motion), which the Kimodo motion server makes." : "")
+                + " Emotions, speech and small talk are not ported yet.",
         };
 
         JObject Look()
@@ -207,14 +209,22 @@ namespace AiWorld.Airi
                 }
                 case "gesture":
                 {
-                    var gesture = Str("gesture") ?? throw new Exception("gesture needs \"gesture\" (see world_status: gestures)");
+                    var gesture = Str("gesture");
+                    var motion = gesture == null ? Str("motion") : null;
+                    if (gesture == null && motion == null) throw new Exception("gesture needs \"gesture\" (see world_status: gestures) or \"motion\" (a motion described in English)");
                     var live = Character.rig.Live;
                     if (!live.Available) throw new Exception("gestures need the live motion server, which is not running");
-                    if (!live.Gestures.Contains(gesture)) throw new Exception($"there is no gesture \"{gesture}\" (there are: {string.Join(", ", live.Gestures)})");
+                    if (gesture != null && !live.Gestures.Contains(gesture)) throw new Exception($"there is no gesture \"{gesture}\" (there are: {string.Join(", ", live.Gestures)})");
+                    if (motion != null && !live.Texts) throw new Exception("a described motion needs the Kimodo motion server: this server plays only the gestures in world_status");
                     if (Brain.HasQueued) throw new Exception($"{Character.displayName} is about to start the action you gave, so a gesture would be cut short");
                     if (!Character.rig.StandingFree) throw new Exception($"gestures play while standing still, and {Character.displayName} is {Character.Doing}");
-                    live.Play(gesture);
-                    return new JObject { ["accepted"] = $"playing {gesture}", ["doing"] = Character.Doing };
+                    if (gesture != null)
+                    {
+                        live.Play(gesture);
+                        return new JObject { ["accepted"] = $"playing {gesture}", ["doing"] = Character.Doing };
+                    }
+                    live.PlayText(motion);
+                    return new JObject { ["accepted"] = $"making \"{motion}\": it starts in a few seconds, or in about 30 s for a description the server has not had before", ["doing"] = Character.Doing };
                 }
                 default:
                     throw new Exception("type must be one of interact, say, gesture, wait");
