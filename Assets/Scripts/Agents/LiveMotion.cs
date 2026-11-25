@@ -13,15 +13,20 @@ using UnityEngine;
 namespace AiWorld.Agents
 {
     /// <summary>
-    /// The body's motion, generated live by the ARDY server (tools/ardy): standing, gestures, and walking along a NavMesh
-    /// path, and sitting, standing up and getting in and out of bed, where the stream also moves the character. The game
-    /// gives it the places and heights (ARDY knows nothing about the room), and this layer keeps hands on what they hold.
+    /// The body's motion, generated live by a motion server: Kimodo (tools/kimodo) or ARDY (tools/ardy). It covers
+    /// standing, gestures, and walking along a NavMesh path, and sitting, standing up and getting in and out of bed, where
+    /// the stream also moves the character. The game gives it the places and heights (the model knows nothing about the
+    /// room), and this layer keeps hands on what they hold. Kimodo also plays a motion described in English.
     /// The server sends each character its own stream of poses a little ahead of playback, and they play over the
     /// Animator's pose, blending in and out. Without a server the game plays its clips as usual.
     /// </summary>
     public sealed class LiveMotion : IDisposable
     {
-        const string DefaultUrl = "ws://127.0.0.1:8791";
+        const string KimodoUrl = "ws://127.0.0.1:8793", ArdyUrl = "ws://127.0.0.1:8791";
+        /// <summary>how long a described motion can take to get ready and still play (s): a new description first loads the text model, about 25 s</summary>
+        const float TextWaitSeconds = 60f;
+        /// <summary>a walk that has not started moving after this long (s) goes back to the NavMesh: Kimodo takes up to about 3 s with two characters</summary>
+        const float WalkStartSeconds = 6f;
         const string IdlePrompt = "idle", RelaxPrompt = "relax";
         // the model tends to hold the pose it is in: going straight from one gesture to another reached the new one in
         // 11 of 24 tries, and through a short relax step in 24 of 24
@@ -182,10 +187,16 @@ namespace AiWorld.Agents
         string prompt, nextGesture;
         float promptSentAt = -1f;
         string[] gestures = Array.Empty<string>();
+        readonly Dictionary<string, (float seconds, float asked)> textAsks = new();
+        /// <summary>the prompts the server offers: a stage with any other prompt is left to the clips</summary>
+        readonly HashSet<string> prompts = new();
+        readonly HashSet<string> textPrompts = new();
 
         /// <summary>the server is connected and the character's bones are fitted to it</summary>
         public bool Available => connected && bones.Count > 0;
         public IReadOnlyList<string> Gestures => gestures;
+        /// <summary>the server plays motions described in English (Kimodo does, ARDY does not)</summary>
+        public bool Texts { get; private set; }
         public float Weight => weight;
         public string Prompt => prompt;
         /// <summary>the stream is walking the character along the path it was given</summary>
@@ -272,8 +283,9 @@ namespace AiWorld.Agents
         {
             var args = Environment.GetCommandLineArgs();
             for (int i = 0; i < args.Length - 1; i++)
-                if (args[i] == "-ardy") return args[i + 1] == "off" ? null : args[i + 1];
-            return DefaultUrl;
+                if (args[i] == "-motion")
+                    return args[i + 1] switch { "off" => null, "kimodo" => KimodoUrl, "ardy" => ArdyUrl, var other => other };
+            return KimodoUrl;
         }
 
         /// <summary>where a bone is in the T-pose, relative to the character</summary>
@@ -282,7 +294,7 @@ namespace AiWorld.Agents
         /// <summary>play a gesture for some seconds, then go back to standing. False if it cannot play now.</summary>
         public bool Play(string gesture, float seconds = 3.5f)
         {
-            if (!Available || !gestures.Contains(gesture)) return false;
+            if (!Available || !(gestures.Contains(gesture) || textPrompts.Contains(gesture))) return false;
             nextGesture = gesture;
             nextSeconds = seconds;
             if (streaming)
@@ -290,6 +302,18 @@ namespace AiWorld.Agents
                 if (prompt == IdlePrompt) StartNext();
                 else if (prompt != RelaxPrompt) Relax();
             }
+            return true;
+        }
+
+        /// <summary>
+        /// play a motion described in English for some seconds, then go back to standing. It starts once the server has
+        /// it ready: a new description can take about 30 s. False if the server cannot play descriptions.
+        /// </summary>
+        public bool PlayText(string description, float seconds = 4f)
+        {
+            if (!Available || !Texts || string.IsNullOrWhiteSpace(description)) return false;
+            textAsks[description] = (seconds, Time.time);
+            Send(new JObject { ["t"] = "play", ["text"] = description });
             return true;
         }
 
@@ -311,11 +335,12 @@ namespace AiWorld.Agents
 
         /// <summary>
         /// move through furniture poses: the stream moves the character until <see cref="Walking"/> ends. With
-        /// <paramref name="hold"/> the last pose is held until the next stage.
+        /// <paramref name="hold"/> the last pose is held until the next stage. False if the server does not offer a
+        /// step's prompt: Kimodo leaves lying down and getting up to the motion capture clips.
         /// </summary>
         public bool Stage(IReadOnlyList<StageStep> steps, bool hold)
         {
-            if (!Available || steps.Count == 0) return false;
+            if (!Available || steps.Count == 0 || steps.Any(s => !prompts.Contains(s.prompt))) return false;
             var list = new JArray();
             foreach (var s in steps)
             {
@@ -403,7 +428,7 @@ namespace AiWorld.Agents
             if (standing && worker == null) worker = Task.Run(Run);
             Receive();
             // a walk that never started moving (the server stalled) gives the character back to the NavMesh
-            if (walking && (!Available || (!walkMoved && Time.time - walkAskedAt > 4f))) EndWalk();
+            if (walking && (!Available || (!walkMoved && Time.time - walkAskedAt > WalkStartSeconds))) EndWalk();
             // just after a walk the body stays on the stream, so it does not drop to the clip and back
             bool want = (standing || walking || (free && Time.time < walkEndedAt + 1f)) && Available;
             if (want && !streaming)
@@ -805,6 +830,9 @@ namespace AiWorld.Agents
             {
                 switch (message)
                 {
+                    case JObject reply when (string)reply["t"] == "text":
+                        OnText(reply);
+                        break;
                     case JObject ready:
                         Fit(ready);
                         connected = true;
@@ -833,10 +861,31 @@ namespace AiWorld.Agents
             }
         }
 
+        /// <summary>a described motion is ready (or failed): play it, if it was asked for not too long ago</summary>
+        void OnText(JObject reply)
+        {
+            var description = (string)reply["text"];
+            var state = (string)reply["state"];
+            if (state == "loading" || description == null || !textAsks.Remove(description, out var ask)) return;
+            if (state != "ready")
+            {
+                Debug.LogWarning($"live motion: the server could not prepare \"{description}\"");
+                return;
+            }
+            var name = (string)reply["prompt"];
+            textPrompts.Add(name);
+            if (Time.time - ask.asked < TextWaitSeconds) Play(name, ask.seconds);
+        }
+
         /// <summary>fit the stream's skeleton to this avatar: bone directions at rest, and leg length for the hips' travel</summary>
         void Fit(JObject ready)
         {
             fps = (int)ready["fps"];
+            Texts = ready["texts"]?.Value<bool>() ?? false;
+            prompts.Clear();
+            prompts.UnionWith(ready["prompts"].Select(x => (string)x));
+            textPrompts.Clear();
+            textAsks.Clear();
             gestures = ready["prompts"].Select(x => (string)x).Where(x => x != IdlePrompt && x != RelaxPrompt && !x.StartsWith("motion_")).Concat(HeadTurns.Keys).Append(SwingGesture).ToArray();
             hipsHeight = (float)ready["rest"]["hipsHeight"];
             var positions = (JObject)ready["rest"]["positions"];

@@ -87,7 +87,7 @@ AIRI ⇄ MCP（stdio 或 HTTP）⇄ bridge/airi-mcp.mjs ⇄ WebSocket（127.0.0.
 - AIRI 连接期间，Airi 会等待 AIRI 的下一个行动。如果 60 秒内没有给出行动，就由 Airi 自己的大脑决定这一件事（自动驾驶），AIRI 会收到 `autopilot` 事件。AIRI 断开后，Airi 会回到自己的大脑。
 - `AiriLink` 会在场景开始时自动加入（[`Assets/Scripts/Airi`](Assets/Scripts/Airi)）。可以在组件上设置地址和自动驾驶时间；打包的版本也可以用 `-airi-bridge ws://127.0.0.1:<端口>` 和 `-airi-autopilot <秒>` 启动。
 - 桥接只监听 127.0.0.1。它接受游戏（游戏不发送 `Origin` 头），网页只接受来自本机的。
-- Airi 站立不动且[实时动作服务](tools/ardy/README.md)运行时，`act` 可以播放 `gesture`。`interact` 加上 `run: true` 时，她会跑过去。Unity 版还没有表情和语音。
+- Airi 站立不动且实时动作服务运行时，`act` 可以播放 `gesture`。默认的服务是 [Kimodo](tools/kimodo/README.md#live-motion)，也可以用 [ARDY](tools/ardy/README.md)。用 Kimodo 时，手势也可以是 Airi 用英文描述的 `motion`。`interact` 加上 `run: true` 时，她会跑过去。Unity 版还没有表情和语音。
 
 ## 项目结构
 
@@ -101,7 +101,7 @@ AIRI ⇄ MCP（stdio 或 HTTP）⇄ bridge/airi-mcp.mjs ⇄ WebSocket（127.0.0.
 | `Assets/Scripts/Airi` | `AiriLink`（游戏这一端的 AIRI 连接）和 `AiriBrain`（AIRI 连接时 Airi 的大脑） |
 | `bridge/` | AIRI MCP 桥接（Node），见“让 AIRI 进入这个世界” |
 | `art/` | Blender 源文件，以及网页版使用的 Kenney 家具素材包 |
-| `tools/kimodo` | 用 NVIDIA Kimodo 生成动作片段（`.vrma`）的脚本 |
+| `tools/kimodo` | Kimodo 实时动作服务，以及用 Kimodo 生成动作片段（`.vrma`）的脚本 |
 
 ### 动作捕捉
 

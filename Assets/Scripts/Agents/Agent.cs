@@ -307,6 +307,19 @@ namespace AiWorld.Agents
         }
 
         /// <summary>move the body (not the NavMesh) to a pose: position and facing, over time</summary>
+        /// <summary>a step or two over the floor to a place, facing as before (the legs walk while the body moves)</summary>
+        IEnumerator Shuffle(Vector3 to, float seconds)
+        {
+            Vector3 p0 = transform.position;
+            var p1 = new Vector3(to.x, p0.y, to.z);
+            for (float t = 0; t < seconds; t += Time.deltaTime)
+            {
+                transform.position = Vector3.Lerp(p0, p1, Mathf.SmoothStep(0, 1, t / seconds));
+                yield return null;
+            }
+            transform.position = p1;
+        }
+
         IEnumerator Glide(Transform to, float seconds)
         {
             Vector3 p0 = transform.position;
@@ -451,6 +464,8 @@ namespace AiWorld.Agents
                 rig.Play(AvatarRig.Sit, 1.0f);
                 yield return SitBackOnto(bed.sit, 1.1f, top + 0.06f);
                 yield return new WaitForSeconds(0.5f);
+                // step out of the shoes, which stay on the floor by the bed
+                yield return TakeOffShoes(bed.sit.forward);
 
                 // draw the knees up and swivel on the seat, so the legs come over the edge onto the bed. The clip is made
                 // facing the foot end, so the root turns to face it now; its first pose is sitting facing the room, so the
@@ -518,8 +533,20 @@ namespace AiWorld.Agents
                 // sitting on the edge facing the room again: the root turns back under the body
                 transform.rotation = bed.sit.rotation;
                 rig.PlayNow(AvatarRig.Sit);
-                rig.PlantFeet(bed.sit.position, bed.sit.forward);
-                yield return new WaitForSeconds(0.8f);
+                if (rig.ShoesAt is Vector3 shoesAt)
+                {
+                    // the feet come down just behind the shoes, then step into them
+                    rig.PlantFeetAt(shoesAt, bed.sit.forward);
+                    rig.ShiftFoot(true, -bed.sit.forward * ShoeStep);
+                    rig.ShiftFoot(false, -bed.sit.forward * ShoeStep);
+                    yield return new WaitForSeconds(0.7f);
+                    yield return PutOnShoes(bed.sit.forward);
+                }
+                else
+                {
+                    rig.PlantFeet(bed.sit.position, bed.sit.forward);
+                    yield return new WaitForSeconds(0.8f);
+                }
                 yield return StandUp(bed.side, rejoinNav: false);
             }
             rig.FitOff();
@@ -532,6 +559,44 @@ namespace AiWorld.Agents
             rig.UnfitClothCapsules();
             rig.FadeClothCapsules(1f, 0f);
             Manual(false);
+        }
+
+        /// <summary>how far a foot draws back out of its shoe, and how high it lifts on the way (m)</summary>
+        const float ShoeStep = 0.12f, FootLift = 0.05f;
+
+        /// <summary>sitting with the feet on the floor: draw each heel back out of its shoe in turn; the shoes stay where they stand</summary>
+        IEnumerator TakeOffShoes(Vector3 forward)
+        {
+            if (!rig.HasShoes) yield break;
+            foreach (bool left in new[] { true, false })
+            {
+                rig.DropShoe(left);
+                yield return MoveFoot(left, Vector3.zero, -forward * ShoeStep, 0.55f);
+                yield return new WaitForSeconds(0.15f);
+            }
+        }
+
+        /// <summary>sitting with the feet just behind the shoes: step into each in turn</summary>
+        IEnumerator PutOnShoes(Vector3 forward)
+        {
+            foreach (bool left in new[] { true, false })
+            {
+                yield return MoveFoot(left, -forward * ShoeStep, Vector3.zero, 0.55f);
+                rig.WearShoe(left);
+                yield return new WaitForSeconds(0.15f);
+            }
+        }
+
+        /// <summary>move one planted foot from one offset to another, lifting it on the way</summary>
+        IEnumerator MoveFoot(bool left, Vector3 from, Vector3 to, float seconds)
+        {
+            for (float t = 0; t < seconds; t += Time.deltaTime)
+            {
+                float k = Mathf.SmoothStep(0, 1, t / seconds);
+                rig.ShiftFoot(left, Vector3.Lerp(from, to, k) + Vector3.up * (FootLift * Mathf.Sin(Mathf.PI * k)));
+                yield return null;
+            }
+            rig.ShiftFoot(left, to);
         }
 
         static LiveMotion.StageStep Step(string prompt, float seconds, Vector3 position, Quaternion facing, float? hipsY, string pose = null) =>
@@ -552,7 +617,7 @@ namespace AiWorld.Agents
         /// </summary>
         IEnumerator HandOnQuilt(BedParts bed, float to, float letGoAt)
         {
-            var grip = bed.blanket.grip;
+            var grip = bed.blanket.lyingGrip ? bed.blanket.lyingGrip : bed.blanket.grip;
             var anim = rig.Animator;
             var l = anim.GetBoneTransform(HumanBodyBones.LeftUpperArm);
             var r = anim.GetBoneTransform(HumanBodyBones.RightUpperArm);
@@ -562,10 +627,10 @@ namespace AiWorld.Agents
             rig.Reach(hand, grip);
             rig.LookAt(grip.position);
             float wait = 0;
-            while (!rig.HandArrived(hand) && (wait += Time.deltaTime) < 0.9f) yield return null;
-            bed.blanket.Fold(to);
-            float from = bed.blanket.Folded;
-            while (Mathf.Abs(bed.blanket.Folded - from) < Mathf.Abs(to - from) * letGoAt)
+            while (!rig.HandArrived(hand) && (wait += Time.deltaTime) < 1.8f) yield return null;
+            yield return new WaitForSeconds(0.15f);     // takes hold: the quilt does not move before the hand is on it
+            bed.blanket.Fold(to, fromLying: true);
+            while (bed.blanket.GripTurned < letGoAt)
             {
                 rig.LookAt(grip.position);
                 yield return null;
@@ -618,23 +683,39 @@ namespace AiWorld.Agents
             rig.HoldHipsAt(hipsTo);
         }
 
-        /// <summary>standing beside the bed: bend over, take the quilt's edge, and turn it back (1) or lay it over (0)</summary>
+        /// <summary>
+        /// standing beside the bed: step over to the quilt's corner, bend over, take the corner, and turn the quilt back
+        /// (1) or lay it over (0), corner first. The quilt does not move until the hand is on it.
+        /// </summary>
         IEnumerator TurnBlanket(BedParts bed, float to)
         {
+            // stand across from the corner, not at the middle of the bed: the corner is toward the head end
+            var grip = bed.blanket.grip;
+            var headward = -bed.lie.forward;
+            var stand = bed.side.position + headward * (Vector3.Dot(grip.position - bed.side.position, headward) * 0.8f);
+            yield return Shuffle(stand, 0.6f);
             yield return TurnTo(-bed.side.forward, 0.5f);
             rig.Play(AvatarRig.Stoop, 0.6f);
-            rig.LookAt(bed.blanket.grip.position);
+            rig.LookAt(grip.position);
             yield return new WaitForSeconds(0.35f);
-            rig.Reach(AvatarIKGoal.RightHand, bed.blanket.grip);
+            var anim = rig.Animator;
+            var hand = (grip.position - anim.GetBoneTransform(HumanBodyBones.LeftHand).position).sqrMagnitude
+                       < (grip.position - anim.GetBoneTransform(HumanBodyBones.RightHand).position).sqrMagnitude
+                ? AvatarIKGoal.LeftHand : AvatarIKGoal.RightHand;
+            rig.Reach(hand, grip);
             float wait = 0;
-            while (!rig.HandArrived(AvatarIKGoal.RightHand) && (wait += Time.deltaTime) < 1f) yield return null;
+            while (!rig.HandArrived(hand) && (wait += Time.deltaTime) < 2.5f) yield return null;
+            yield return new WaitForSeconds(0.15f);     // takes hold
             bed.blanket.Fold(to);
-            // the hand goes with the edge as far as it reaches, then lets the quilt's weight carry it over
-            while (Mathf.Abs(bed.blanket.Folded - to) > 0.55f) { rig.LookAt(bed.blanket.grip.position); yield return null; }
-            rig.LetGo(AvatarIKGoal.RightHand);
+            // the hand goes with the corner as far as it reaches, then lets the quilt's weight carry it over
+            while (bed.blanket.GripTurned < 0.45f) { rig.LookAt(grip.position); yield return null; }
+            rig.LetGo(hand);
             rig.Play(AvatarRig.Locomotion, 0.7f);
             while (Mathf.Abs(bed.blanket.Folded - to) > 0.02f) yield return null;
             rig.LookAt(null);
+            // back to the middle of the side: sitting down from where the corner was, the feet stayed 36 cm off to
+            // the side of the seat, and the legs (and the shoes left there) were skewed
+            yield return Shuffle(bed.side.position, 0.6f);
             yield return new WaitForSeconds(0.3f);
         }
 
